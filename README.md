@@ -18,17 +18,18 @@ Marketplace decisions are time-sensitive and often made from stale or incomplete
 
 ## Solution Overview
 
-AMI is the main advisor and coordinator. It receives the market context, coordinates exactly three visible assistants, resolves the signals, and returns a prioritized recommendation.
+AMI is the main advisor and coordinator. It receives the market context, coordinates four visible assistants, resolves the signals, and returns a prioritized recommendation.
 
-- Competitor Assistant: tracks competitor pricing, promotions, availability, and market pressure.
-- Inventory Assistant: evaluates inventory posture, stock risk, margin context, and operational opportunity.
 - Trend Assistant: detects demand signals, social momentum, seasonality, and product trend direction.
+- Competitor Assistant: tracks competitor pricing, promotions, availability, and market pressure.
+- Supplier Assistant: evaluates sourcing feasibility, unit cost, delivery windows, and supplier risk.
+- Inventory Assistant: evaluates inventory posture, stock risk, margin context, and operational opportunity.
 
 ## Six Macro Screen Architecture
 
 1. Start / Access Screen: AMI intro, overview access, demo access, login, and registration.
 2. Market Context Setup Screen: product/category, target marketplace, supplier source, business goal, region/currency, and optional inventory-context use.
-3. Processing Screen: AMI status, progress, three assistant activity states, source collection status, and only back-to-setup action.
+3. Processing Screen: AMI status, progress, four assistant activity states, source collection status, and only back-to-setup action.
 4. AMI Recommendations Screen: executive recommendation, opportunity ranking, assistant contribution summary, comparison, evidence drawer, and save/approve/export actions.
 5. Assistant Overview Screen: assistant usage, credit limits, 90% alert, exceeded-limit warning, last run, latest contribution, sources, usage count, and estimated usage cost.
 6. Account / Workspace Screen: user profile, marketplace profile, saved reports, historical recommendations, inventory context, sync status, approved recommendation history, demo payment simulator, and credit management.
@@ -90,12 +91,44 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 Without MongoDB, AMI uses an in-memory demo fallback for local judging. Without Bright Data credentials, AMI uses clearly labeled demo fallback snapshots.
 
+## Inventory Context MVP
+
+Inventory context is a lightweight source layer for AMI recommendations, not a full inventory management system. It supports:
+
+- `marketplace_url`
+- `api_key`
+- `bearer_token`
+- `csv_upload`
+- `json_upload`
+- `demo_snapshot`
+
+The Control Hub / Marketplace Setup inventory card lets users connect, re-sync, or remove the current inventory source. The selected connection type controls the visible fields immediately:
+
+- Marketplace URL mode shows marketplace name and URL.
+- API key mode shows marketplace name, URL, and a masked secure credential input.
+- Bearer token mode shows marketplace name, URL, and a masked secure credential input.
+- CSV upload mode shows a `.csv,text/csv` file input and selected file metadata.
+- JSON upload mode shows a `.json,application/json` file input, selected file metadata, and JSON parse validation.
+- Demo snapshot mode uses seeded AMI inventory data for local testing.
+
+Saved inventory status includes connection type, credential type, source summary, latest sync timestamp, uploaded file metadata, and warning/error state. Raw API keys, bearer tokens, and uploaded file contents are not shown back in the UI.
+
+## Inventory-Aware Analysis Rules
+
+Inventory context must not block every analysis goal.
+
+- `discover_new_products`: inventory is optional. If `useInventoryContext` is true but no usable inventory source is connected, AMI continues with trend, competitor, and supplier signals. The Inventory Assistant is marked as warning/skipped and the final strategy includes an inventory warning.
+- `stock_optimization`: inventory is required. Missing inventory returns a clear validation error instead of leaving the run pending.
+- `revenue_stock_opportunities`: inventory is required. Missing inventory returns a clear validation error instead of leaving the run pending.
+
+Demo fallback never fails only because inventory is missing. When no usable inventory source is available, AMI skips inventory context, returns a complete strategy result, and includes a warning.
+
 ## Demo Flow For Judges
 
 1. Start at `/` and choose Demo.
 2. Confirm or edit the Market Context Setup values.
 3. Start AMI Analysis.
-4. Watch the Processing screen show AMI coordinating Competitor, Inventory, and Trend assistants.
+4. Watch the Processing screen show AMI coordinating Trend, Competitor, Supplier, and Inventory assistants.
 5. Review AMI Recommendations: action, opportunity score, estimated margin, demand signal, risk, confidence, reason, and next step.
 6. Open Evidence and source data to see Bright Data live/demo contribution.
 7. Save, approve, or export the recommendation.
@@ -123,6 +156,8 @@ Without MongoDB, AMI uses an in-memory demo fallback for local judging. Without 
 - Inventory credentials are encrypted with AES-256-GCM.
 - Inventory API responses expose only `credentialFingerprint` and `maskedCredential`.
 - Inventory URLs are limited to http/https and block localhost/internal network targets.
+- CSV/JSON inventory uploads stay inside the existing MVP persistence path and expose only file metadata in UI/API status responses.
+- Demo fallback and optional-inventory analysis paths do not log or expose raw credentials or uploaded file contents.
 - Demo payment never stores full card number or CCV.
 - Demo payment stores only card last four, expiration month/year, `simulated_approved`, and credit amount.
 - Zod validates auth, market context, assistant output, recommendation, evidence, inventory, usage limit, and demo payment payloads.
@@ -135,7 +170,7 @@ Without MongoDB, AMI uses an in-memory demo fallback for local judging. Without 
 - Full inventory management
 - Automated purchasing
 - Standalone reports, history, evidence, inventory, billing, or raw-data explorer macro screens
-- More visible assistants beyond Competitor, Inventory, and Trend
+- More visible assistants beyond Trend, Competitor, Supplier, and Inventory
 - Assistant customization or enterprise permission controls
 - Chatbot-first UX
 
@@ -144,5 +179,5 @@ Without MongoDB, AMI uses an in-memory demo fallback for local judging. Without 
 - Live Bright Data calls require credentials and endpoint configuration.
 - Demo fallback snapshots are deterministic and labeled as demo.
 - MongoDB persistence is optional for local demo; in-memory state resets when the dev server restarts.
-- Inventory upload types are represented as connection metadata in the MVP, not full dataset ingestion.
+- Inventory CSV/JSON uploads are temporary MVP source context, not full dataset ingestion or inventory table management.
 - OpenAI orchestration is not claimed as active production intelligence in this MVP.

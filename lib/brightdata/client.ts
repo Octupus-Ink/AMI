@@ -55,10 +55,19 @@ export async function searchSERP(query: string): Promise<BrightDataResponse<type
     };
   }
 
-  return brightDataFetch<typeof demoSerpResults>(process.env.BRIGHT_DATA_SERP_ENDPOINT, "SERP API", {
-    query,
-    parse: true
-  });
+  try {
+    return await brightDataFetch<typeof demoSerpResults>(process.env.BRIGHT_DATA_SERP_ENDPOINT, "SERP API", {
+      query,
+      parse: true
+    });
+  } catch {
+    return {
+      mode: "demo_fallback",
+      product: "SERP API",
+      data: demoSerpResults,
+      message: "Bright Data SERP API live request failed, so AMI used the seeded demo fallback."
+    };
+  }
 }
 
 export async function scrapeProductPage(url: string): Promise<BrightDataResponse<typeof demoCompetitorSnapshot>> {
@@ -71,10 +80,19 @@ export async function scrapeProductPage(url: string): Promise<BrightDataResponse
     };
   }
 
-  return brightDataFetch<typeof demoCompetitorSnapshot>(process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT, "Web Scraper API", {
-    url,
-    parse: true
-  });
+  try {
+    return await brightDataFetch<typeof demoCompetitorSnapshot>(process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT, "Web Scraper API", {
+      url,
+      parse: true
+    });
+  } catch {
+    return {
+      mode: "demo_fallback",
+      product: "Web Scraper API",
+      data: demoCompetitorSnapshot,
+      message: "Bright Data Web Scraper API live request failed, so AMI used the seeded demo fallback."
+    };
+  }
 }
 
 export async function unlockUrl(url: string): Promise<BrightDataResponse<{ url: string; html?: string }>> {
@@ -87,7 +105,16 @@ export async function unlockUrl(url: string): Promise<BrightDataResponse<{ url: 
     };
   }
 
-  return brightDataFetch<{ url: string; html?: string }>(process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT, "Web Unlocker", {
-    url
-  });
+  try {
+    return await brightDataFetch<{ url: string; html?: string }>(process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT, "Web Unlocker", {
+      url
+    });
+  } catch {
+    return {
+      mode: "demo_fallback",
+      product: "Web Unlocker",
+      data: { url },
+      message: "Bright Data Web Unlocker live request failed, so AMI used the demo fallback."
+    };
+  }
 }

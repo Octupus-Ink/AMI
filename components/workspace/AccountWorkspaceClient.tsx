@@ -2,64 +2,176 @@
 
 import { useEffect, useState } from "react";
 import {
-  BadgeDollarSign,
   BriefcaseBusiness,
   CheckCircle2,
   CreditCard,
   Database,
   FileClock,
   LinkIcon,
+  RefreshCw,
   ShieldCheck,
-  UserRound
+  Trash2,
+  UserRound,
+  WalletCards
 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
-import type { Recommendation } from "@/lib/schemas/ami";
+import type { InventoryConnectionType, InventorySourceStatus, Recommendation } from "@/lib/schemas/ami";
 
 type WorkspaceSnapshot = {
   user?: { name: string; email: string };
   workspace?: Record<string, unknown>;
   marketplaceProfile?: Record<string, unknown>;
-  credits?: { balance: number; lastLedgerEvent: string };
+  linkedServices?: {
+    brightDataStatus?: string;
+    connectionMode?: string;
+    lastCredentialCheck?: string;
+  };
+  credits?: { balance: number; initialDemoCredits?: number; lastLedgerEvent: string };
   inventoryStatus?: {
     connected?: boolean;
+    marketplaceName?: string;
+    marketplaceUrl?: string;
+    connectionType?: InventoryConnectionType;
+    credentialType?: InventoryConnectionType;
     latestConnectionLabel?: string;
     lastSyncAt?: string | null;
     lastAnalysisAt?: string | null;
-    status?: string;
+    uploadedFileName?: string;
+    uploadedFileType?: "csv" | "json";
+    uploadedFileSize?: number;
+    status?: InventorySourceStatus;
+    warningMessage?: string;
+    errorMessage?: string;
   };
   savedReports?: Array<Record<string, unknown>>;
   approvedRecommendations?: Recommendation[];
 };
 
-const initialInventory = {
-  marketplaceName: "Amazon",
-  marketplaceUrl: "https://www.amazon.com/",
-  connectionType: "demo_snapshot",
-  credentialType: "demo_snapshot",
-  credential: "demo"
+type InventoryFormState = {
+  marketplaceName: string;
+  marketplaceUrl: string;
+  connectionType: InventoryConnectionType;
+  credentialType: InventoryConnectionType;
+  credential: string;
+  uploadedFileName: string;
+  uploadedFileType?: "csv" | "json";
+  uploadedFileSize?: number;
+  uploadedFileContent: string;
 };
 
-const initialPayment = {
-  cardholderName: "Demo Operator",
-  cardNumber: "",
-  expirationMonth: "12",
-  expirationYear: "2027",
-  ccv: "",
-  amountCredits: "250"
+const initialInventory: InventoryFormState = {
+  marketplaceName: "Amazon",
+  marketplaceUrl: "https://www.amazon.com/",
+  connectionType: "marketplace_url",
+  credentialType: "marketplace_url",
+  credential: "",
+  uploadedFileName: "",
+  uploadedFileSize: undefined,
+  uploadedFileContent: ""
 };
+
+const mockPayment = {
+  cardholderName: "Demo Workspace",
+  cardBrand: "Visa",
+  last4: "4242",
+  expirationDate: "12/28",
+  billingEmail: "billing@demo-workspace.com",
+  billingCountry: "United States",
+  billingZip: "94105",
+  paymentStatus: "Demo mode"
+};
+
+function formatStatus(value: string | undefined) {
+  return (value ?? "not_connected")
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function badgeTone(status: InventorySourceStatus | undefined): "neutral" | "blue" | "teal" | "amber" | "red" | "green" {
+  if (status === "connected") {
+    return "green";
+  }
+
+  if (status === "demo_snapshot") {
+    return "teal";
+  }
+
+  if (status === "syncing") {
+    return "blue";
+  }
+
+  if (status === "warning") {
+    return "amber";
+  }
+
+  if (status === "error") {
+    return "red";
+  }
+
+  return "neutral";
+}
+
+function isCredentialConnection(type: InventoryConnectionType) {
+  return type === "api_key" || type === "bearer_token";
+}
+
+function isUploadConnection(type: InventoryConnectionType) {
+  return type === "csv_upload" || type === "json_upload";
+}
+
+function requiresMarketplaceUrl(type: InventoryConnectionType) {
+  return type === "marketplace_url" || type === "api_key" || type === "bearer_token";
+}
+
+function formatFileSize(size: number | undefined) {
+  if (typeof size !== "number") {
+    return "Size unavailable";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  return `${(size / 1024).toFixed(1)} KB`;
+}
+
+function inventoryFormFromStatus(status: WorkspaceSnapshot["inventoryStatus"]): InventoryFormState {
+  if (!status?.connected || !status.connectionType) {
+    return initialInventory;
+  }
+
+  return {
+    marketplaceName: status.marketplaceName ?? "Amazon",
+    marketplaceUrl: status.marketplaceUrl ?? "",
+    connectionType: status.connectionType,
+    credentialType: status.connectionType,
+    credential: "",
+    uploadedFileName: status.uploadedFileName ?? "",
+    uploadedFileType: status.uploadedFileType,
+    uploadedFileSize: status.uploadedFileSize,
+    uploadedFileContent: ""
+  };
+}
 
 export function AccountWorkspaceClient() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>({});
   const [inventory, setInventory] = useState(initialInventory);
-  const [payment, setPayment] = useState(initialPayment);
+  const [paymentCleared, setPaymentCleared] = useState(false);
+  const [showPaymentMock, setShowPaymentMock] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"info" | "error">("info");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [inventoryBusy, setInventoryBusy] = useState<"connect" | "sync" | "remove" | null>(null);
 
   useEffect(() => {
     async function loadWorkspace() {
       const response = await fetch("/api/workspace");
 
       if (response.ok) {
-        setSnapshot(await response.json());
+        const nextSnapshot = (await response.json()) as WorkspaceSnapshot;
+        setSnapshot(nextSnapshot);
+        setInventory(inventoryFormFromStatus(nextSnapshot.inventoryStatus));
       }
     }
 
@@ -70,247 +182,523 @@ export function AccountWorkspaceClient() {
     const response = await fetch("/api/workspace");
 
     if (response.ok) {
-      setSnapshot(await response.json());
+      const nextSnapshot = (await response.json()) as WorkspaceSnapshot;
+      setSnapshot(nextSnapshot);
+      setInventory(inventoryFormFromStatus(nextSnapshot.inventoryStatus));
     }
+  }
+
+  function showMessage(nextMessage: string, tone: "info" | "error" = "info") {
+    setMessage(nextMessage);
+    setMessageTone(tone);
+  }
+
+  function updateConnectionType(connectionType: InventoryConnectionType) {
+    setInventory((current) => {
+      const keepUpload = isUploadConnection(connectionType) && current.connectionType === connectionType;
+
+      return {
+        ...current,
+        connectionType,
+        credentialType: connectionType,
+        credential: isCredentialConnection(connectionType) ? current.credential : "",
+        uploadedFileName: keepUpload ? current.uploadedFileName : "",
+        uploadedFileType: keepUpload ? current.uploadedFileType : undefined,
+        uploadedFileSize: keepUpload ? current.uploadedFileSize : undefined,
+        uploadedFileContent: keepUpload ? current.uploadedFileContent : ""
+      };
+    });
+    setUploadMessage("");
+    setMessage("");
+  }
+
+  function validateInventoryForm() {
+    if (!inventory.marketplaceName.trim()) {
+      return "Marketplace name is required.";
+    }
+
+    if (requiresMarketplaceUrl(inventory.connectionType) && !inventory.marketplaceUrl.trim()) {
+      return "Marketplace URL is required for this connection type.";
+    }
+
+    if (inventory.connectionType === "api_key" && !inventory.credential.trim()) {
+      return "API key is required.";
+    }
+
+    if (inventory.connectionType === "bearer_token" && !inventory.credential.trim()) {
+      return "Bearer token is required.";
+    }
+
+    if (inventory.connectionType === "csv_upload" && (!inventory.uploadedFileName || !inventory.uploadedFileContent)) {
+      return "CSV file is required before connecting.";
+    }
+
+    if (inventory.connectionType === "json_upload" && (!inventory.uploadedFileName || !inventory.uploadedFileContent)) {
+      return "JSON file is required before connecting.";
+    }
+
+    return "";
+  }
+
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    const expectedType = inventory.connectionType === "json_upload" ? "json" : "csv";
+
+    if (!file) {
+      setInventory((current) => ({
+        ...current,
+        uploadedFileName: "",
+        uploadedFileType: undefined,
+        uploadedFileSize: undefined,
+        uploadedFileContent: ""
+      }));
+      setUploadMessage("");
+      return;
+    }
+
+    const extensionOk = file.name.toLowerCase().endsWith(`.${expectedType}`);
+    const mimeOk = expectedType === "csv" ? file.type === "text/csv" : file.type === "application/json";
+
+    if (!extensionOk && !mimeOk) {
+      event.currentTarget.value = "";
+      setInventory((current) => ({
+        ...current,
+        uploadedFileName: "",
+        uploadedFileType: undefined,
+        uploadedFileSize: undefined,
+        uploadedFileContent: ""
+      }));
+      setUploadMessage(`Selected file must be a .${expectedType} file.`);
+      return;
+    }
+
+    const content = await file.text();
+
+    if (expectedType === "json") {
+      try {
+        JSON.parse(content);
+      } catch {
+        event.currentTarget.value = "";
+        setInventory((current) => ({
+          ...current,
+          uploadedFileName: "",
+          uploadedFileType: undefined,
+          uploadedFileSize: undefined,
+          uploadedFileContent: ""
+        }));
+        setUploadMessage("Selected JSON file must contain parseable JSON.");
+        return;
+      }
+    }
+
+    setInventory((current) => ({
+      ...current,
+      uploadedFileName: file.name,
+      uploadedFileType: expectedType,
+      uploadedFileSize: file.size,
+      uploadedFileContent: content
+    }));
+    setUploadMessage(`${file.name} selected (${formatFileSize(file.size)}).`);
   }
 
   async function connectInventory(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const validationError = validateInventoryForm();
+
+    if (validationError) {
+      showMessage(validationError, "error");
+      return;
+    }
+
+    setInventoryBusy("connect");
     setMessage("");
     const response = await fetch("/api/inventory/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(inventory)
     });
+    setInventoryBusy(null);
 
     if (!response.ok) {
       const error = await response.json();
-      setMessage(error.error ?? "Inventory source could not be connected.");
-      return;
-    }
-
-    setInventory((current) => ({ ...current, credential: "" }));
-    setMessage("Inventory context connected. Credentials are stored encrypted and shown only as masked metadata.");
-    await load();
-  }
-
-  async function simulatePayment(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-    const response = await fetch("/api/credits/simulate-payment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cardholderName: payment.cardholderName,
-        cardNumber: payment.cardNumber,
-        expirationMonth: Number(payment.expirationMonth),
-        expirationYear: Number(payment.expirationYear),
-        ccv: payment.ccv,
-        amountCredits: Number(payment.amountCredits)
-      })
-    });
-
-    if (!response.ok) {
-      setMessage("Demo payment was not accepted.");
+      showMessage(error.error ?? "Inventory source could not be connected.", "error");
       return;
     }
 
     const payload = await response.json();
-    setPayment((current) => ({ ...current, cardNumber: "", ccv: "" }));
-    setMessage(`Simulated payment approved. Stored card reference: ****${payload.payment.cardLast4}.`);
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(inventoryFormFromStatus(payload.inventoryStatus));
+    setUploadMessage("");
+    showMessage(
+      isCredentialConnection(inventory.connectionType)
+        ? "Inventory context connected. Credentials are stored encrypted and shown only as masked metadata."
+        : "Inventory context connected.",
+      "info"
+    );
     await load();
+  }
+
+  async function resyncInventory() {
+    if (snapshot.inventoryStatus?.connected && snapshot.inventoryStatus.connectionType !== inventory.connectionType) {
+      showMessage("Connect the selected inventory source before re-syncing.", "error");
+      return;
+    }
+
+    setInventoryBusy("sync");
+    setMessage("");
+    setSnapshot((current) => ({
+      ...current,
+      inventoryStatus: current.inventoryStatus
+        ? { ...current.inventoryStatus, status: "syncing" }
+        : {
+            connected: false,
+            latestConnectionLabel: "No inventory source connected",
+            lastSyncAt: null,
+            lastAnalysisAt: null,
+            status: "syncing"
+          }
+    }));
+
+    const response = await fetch("/api/inventory/sync", { method: "POST" });
+    setInventoryBusy(null);
+
+    if (!response.ok) {
+      showMessage("Inventory source could not be re-synced.", "error");
+      return;
+    }
+
+    const payload = await response.json();
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(inventoryFormFromStatus(payload.inventoryStatus));
+    showMessage(
+      payload.inventoryStatus?.status === "warning"
+        ? payload.inventoryStatus.warningMessage ?? "No inventory source is connected."
+        : "Inventory source re-synced.",
+      payload.inventoryStatus?.status === "warning" ? "error" : "info"
+    );
+  }
+
+  async function removeInventory() {
+    setInventoryBusy("remove");
+    setMessage("");
+    const response = await fetch("/api/inventory/connect", { method: "DELETE" });
+    setInventoryBusy(null);
+
+    if (!response.ok) {
+      showMessage("Inventory source could not be removed.", "error");
+      return;
+    }
+
+    const payload = await response.json();
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(initialInventory);
+    setUploadMessage("");
+    showMessage("Inventory source removed.", "info");
   }
 
   const workspace = snapshot.workspace ?? {};
   const profile = snapshot.marketplaceProfile ?? {};
   const inventoryStatus = snapshot.inventoryStatus;
+  const monthlyLimit = snapshot.credits?.initialDemoCredits ?? 250;
+  const availableCredits = snapshot.credits?.balance ?? 250;
+  const creditsUsed = Math.max(0, monthlyLimit - availableCredits);
+  const payment = paymentCleared ? { ...mockPayment, last4: "Not set", paymentStatus: "Demo method removed" } : mockPayment;
+  const selectedDiffersFromSaved = Boolean(
+    inventoryStatus?.connected && inventoryStatus.connectionType && inventoryStatus.connectionType !== inventory.connectionType
+  );
+  const visibleInventoryStatus = selectedDiffersFromSaved ? "not_connected" : inventoryStatus?.status;
+  const visibleConnectionLabel = selectedDiffersFromSaved
+    ? `${inventory.marketplaceName || "Marketplace"} - ${inventory.connectionType} (not connected)`
+    : inventoryStatus?.latestConnectionLabel ?? "No inventory source connected";
+  const visibleLastSyncAt = selectedDiffersFromSaved ? null : inventoryStatus?.lastSyncAt;
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <Badge tone="teal">Account / Workspace</Badge>
-        <h1 className="mt-4 text-3xl font-semibold text-slate-950">Workspace context and decision history</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-          User profile, marketplace context, inventory context, recommendation history, and demo credits stay in this
-          workspace area.
+        <Badge tone="teal">Control Hub</Badge>
+        <h1 className="mt-4 text-3xl font-semibold text-slate-950">Control Hub</h1>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+          Manage workspace context, linked services, inventory source, recommendation history, and demo credits.
         </p>
 
-        {message && <p className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">{message}</p>}
+        {message && (
+          <p
+            className={`mt-5 rounded-lg border p-3 text-sm ${
+              messageTone === "error" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-teal-200 bg-teal-50 text-teal-900"
+            }`}
+          >
+            {message}
+          </p>
+        )}
       </section>
 
-      <section className="mt-5 grid gap-5 lg:grid-cols-2">
-        <Panel icon={<UserRound size={20} />} title="User profile">
-          <Fact label="Name" value={snapshot.user?.name ?? "Not loaded"} />
-          <Fact label="Email" value={snapshot.user?.email ?? "Not loaded"} />
-        </Panel>
-
-        <Panel icon={<BriefcaseBusiness size={20} />} title="Marketplace profile">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Fact label="Workspace" value={String(workspace.workspaceName ?? workspace.name ?? "AMI Workspace")} />
-            <Fact label="Workspace type" value={String(workspace.workspaceType ?? "Marketplace operator")} />
-            <Fact label="Business" value={String(profile.businessName ?? "Marketplace business")} />
-            <Fact label="Primary marketplace" value={String(profile.primaryMarketplace ?? "Marketplace")} />
-            <Fact label="Main category" value={String(profile.mainProductCategory ?? "Category")} />
-            <Fact label="Region / currency" value={`${String(profile.targetRegion ?? "Region")} / ${String(profile.defaultCurrency ?? "USD")}`} />
-          </div>
-        </Panel>
-      </section>
-
-      <section className="mt-5 grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
-        <Panel icon={<Database size={20} />} title="Inventory context">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-slate-950">Sync status</p>
-              <Badge tone={inventoryStatus?.connected ? "green" : "neutral"}>{inventoryStatus?.status ?? "not_connected"}</Badge>
+      <details className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" open>
+        <summary className="text-lg font-semibold text-slate-950">Personal Information</summary>
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+          <Panel icon={<UserRound size={20} />} title="User profile">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Fact label="Name" value={snapshot.user?.name ?? "Not loaded"} />
+              <Fact label="Email" value={snapshot.user?.email ?? "Not loaded"} />
+              <Fact label="Workspace role" value="Workspace operator" />
             </div>
-            <p className="mt-2 text-sm text-slate-700">{inventoryStatus?.latestConnectionLabel ?? "No inventory source connected"}</p>
-            <p className="mt-2 text-sm text-slate-600">
-              {inventoryStatus?.lastAnalysisAt
-                ? `Last analysis completed using inventory data from ${new Date(inventoryStatus.lastAnalysisAt).toLocaleString()}.`
-                : "No inventory analysis timestamp is available yet."}
-            </p>
-          </div>
+          </Panel>
 
-          <form onSubmit={connectInventory} className="mt-4 grid gap-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label="Marketplace name"
-                value={inventory.marketplaceName}
-                onChange={(value) => setInventory((current) => ({ ...current, marketplaceName: value }))}
-              />
-              <Field
-                label="Marketplace URL"
-                value={inventory.marketplaceUrl}
-                onChange={(value) => setInventory((current) => ({ ...current, marketplaceUrl: value }))}
-              />
-              <label className="block">
-                <span className="text-xs font-semibold uppercase text-slate-500">Connection type</span>
-                <select
-                  value={inventory.connectionType}
-                  onChange={(event) => setInventory((current) => ({ ...current, connectionType: event.target.value }))}
-                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-                >
-                  <option value="marketplace_url">marketplace_url</option>
-                  <option value="api_key">api_key</option>
-                  <option value="bearer_token">bearer_token</option>
-                  <option value="csv_upload">csv_upload</option>
-                  <option value="json_upload">json_upload</option>
-                  <option value="demo_snapshot">demo_snapshot</option>
-                </select>
-              </label>
-              <Field
-                label="Credential type"
-                value={inventory.credentialType}
-                onChange={(value) => setInventory((current) => ({ ...current, credentialType: value }))}
+          <Panel icon={<LinkIcon size={20} />} title="Linked services">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Fact label="Bright Data status" value={formatStatus(snapshot.linkedServices?.brightDataStatus)} />
+              <Fact label="Connection mode" value={snapshot.linkedServices?.connectionMode ?? "Demo fallback"} />
+              <Fact
+                label="Last credential check"
+                value={
+                  snapshot.linkedServices?.lastCredentialCheck
+                    ? new Date(snapshot.linkedServices.lastCredentialCheck).toLocaleString()
+                    : "Not checked"
+                }
               />
             </div>
-            <label className="block">
-              <span className="text-xs font-semibold uppercase text-slate-500">Secure credential input</span>
-              <input
-                type="password"
-                value={inventory.credential}
-                onChange={(event) => setInventory((current) => ({ ...current, credential: event.target.value }))}
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-              />
-            </label>
-            <button
-              type="submit"
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
-            >
-              <LinkIcon size={18} />
-              Connect Inventory Source
-            </button>
-          </form>
-        </Panel>
+          </Panel>
 
-        <Panel icon={<CreditCard size={20} />} title="Demo payment simulator">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-            Real Stripe billing is not active in this MVP. This simulator updates the internal credit ledger and stores only
-            card last four, expiration, simulated status, and credit amount.
-          </div>
-          <form onSubmit={simulatePayment} className="mt-4 grid gap-4">
-            <Field
-              label="Cardholder name"
-              value={payment.cardholderName}
-              onChange={(value) => setPayment((current) => ({ ...current, cardholderName: value }))}
-            />
-            <Field
-              label="Card number"
-              value={payment.cardNumber}
-              onChange={(value) => setPayment((current) => ({ ...current, cardNumber: value }))}
-            />
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field
-                label="Exp. month"
-                value={payment.expirationMonth}
-                onChange={(value) => setPayment((current) => ({ ...current, expirationMonth: value }))}
-              />
-              <Field
-                label="Exp. year"
-                value={payment.expirationYear}
-                onChange={(value) => setPayment((current) => ({ ...current, expirationYear: value }))}
-              />
-              <Field label="CCV" value={payment.ccv} onChange={(value) => setPayment((current) => ({ ...current, ccv: value }))} />
+          <Panel icon={<CreditCard size={20} />} title="Payment method">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+              Real payment processing is not active in this MVP. These fields are shown as a future-ready payment setup
+              mockup. Demo credits are used to simulate assistant usage.
             </div>
-            <label className="block">
-              <span className="text-xs font-semibold uppercase text-slate-500">Credit package</span>
-              <select
-                value={payment.amountCredits}
-                onChange={(event) => setPayment((current) => ({ ...current, amountCredits: event.target.value }))}
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Fact label="Cardholder name" value={payment.cardholderName} />
+              <Fact label="Card brand" value={payment.cardBrand} />
+              <Fact label="Last 4 digits" value={payment.last4} />
+              <Fact label="Expiration date" value={payment.expirationDate} />
+              <Fact label="Billing email" value={payment.billingEmail} />
+              <Fact label="Billing country" value={payment.billingCountry} />
+              <Fact label="Billing ZIP / postal code" value={payment.billingZip} />
+              <Fact label="Payment status" value={payment.paymentStatus} />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => setShowPaymentMock((current) => !current)}
+                className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
               >
-                <option value="100">100 credits</option>
-                <option value="250">250 credits</option>
-                <option value="500">500 credits</option>
-              </select>
-            </label>
-            <button
-              type="submit"
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
-            >
-              <BadgeDollarSign size={18} />
-              Simulate Credit Approval
-            </button>
-          </form>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase text-slate-500">Credit balance</p>
-            <p className="mt-2 text-2xl font-semibold text-slate-950">{snapshot.credits?.balance ?? 0} credits</p>
-            <p className="mt-1 text-sm text-slate-600">{snapshot.credits?.lastLedgerEvent ?? "No ledger event loaded"}</p>
-          </div>
-        </Panel>
-      </section>
-
-      <section className="mt-5 grid gap-5 lg:grid-cols-2">
-        <Panel icon={<FileClock size={20} />} title="Saved reports">
-          <HistoryList items={snapshot.savedReports ?? []} empty="No saved reports yet." />
-        </Panel>
-        <Panel icon={<CheckCircle2 size={20} />} title="Approved recommendation history">
-          <div className="space-y-3">
-            {(snapshot.approvedRecommendations ?? []).length === 0 && (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                No approved recommendations yet.
-              </p>
-            )}
-            {(snapshot.approvedRecommendations ?? []).map((recommendation) => (
-              <div key={recommendation.recommendationId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="font-semibold text-slate-950">{recommendation.recommendedAction}</p>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{recommendation.suggestedNextStep}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge tone="teal">{recommendation.confidenceLevel} confidence</Badge>
-                  <Badge tone={recommendation.riskLevel === "high" ? "red" : "amber"}>{recommendation.riskLevel} risk</Badge>
-                </div>
+                Edit payment method
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPaymentCleared(true);
+                  showMessage("Mock payment method removed from this local view only.", "info");
+                }}
+                className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
+              >
+                Remove payment method
+              </button>
+            </div>
+            {showPaymentMock && (
+              <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                <DisabledField label="Cardholder name" value={payment.cardholderName} />
+                <DisabledField label="Card brand" value={payment.cardBrand} />
+                <DisabledField label="Last 4 digits" value={payment.last4} />
+                <DisabledField label="Expiration date" value={payment.expirationDate} />
               </div>
-            ))}
-          </div>
-        </Panel>
-      </section>
+            )}
+          </Panel>
+
+          <Panel icon={<WalletCards size={20} />} title="Demo credits">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Fact label="Available demo credits" value={`${availableCredits} credits`} />
+              <Fact label="Credits used" value={`${creditsUsed} / ${monthlyLimit}`} />
+              <Fact label="Monthly demo limit" value={`${monthlyLimit} credits`} />
+              <Fact label="Credit reset date" value="01/06/26" />
+            </div>
+          </Panel>
+        </div>
+      </details>
+
+      <details id="marketplace-setup" className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" open>
+        <summary className="text-lg font-semibold text-slate-950">Marketplace Setup</summary>
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+          <Panel icon={<BriefcaseBusiness size={20} />} title="Marketplace profile">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Fact label="Workspace name" value={String(workspace.workspaceName ?? workspace.name ?? "AMI Workspace")} />
+              <Fact label="Workspace type" value={String(workspace.workspaceType ?? "Marketplace operator")} />
+              <Fact label="Business name" value={String(profile.businessName ?? "Marketplace business")} />
+              <Fact label="Primary marketplace" value={String(profile.primaryMarketplace ?? "Marketplace")} />
+              <Fact label="Main category" value={String(profile.mainProductCategory ?? "Category")} />
+              <Fact label="Region" value={String(profile.targetRegion ?? "Region")} />
+              <Fact label="Currency" value={String(profile.defaultCurrency ?? "USD")} />
+            </div>
+          </Panel>
+
+          <Panel icon={<Database size={20} />} title="Inventory context">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-slate-950">Sync status</p>
+                <Badge tone={badgeTone(visibleInventoryStatus)}>{formatStatus(visibleInventoryStatus)}</Badge>
+              </div>
+              <p className="mt-2 text-sm text-slate-700">{visibleConnectionLabel}</p>
+              <p className="mt-2 text-sm text-slate-600">
+                Latest sync timestamp:{" "}
+                {visibleLastSyncAt ? new Date(visibleLastSyncAt).toLocaleString() : "Not available"}
+              </p>
+              {!selectedDiffersFromSaved && inventoryStatus?.uploadedFileName && (
+                <p className="mt-2 text-sm text-slate-600">
+                  Uploaded file: {inventoryStatus.uploadedFileName} ({formatFileSize(inventoryStatus.uploadedFileSize)})
+                </p>
+              )}
+              {!selectedDiffersFromSaved && inventoryStatus?.warningMessage && (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                  {inventoryStatus.warningMessage}
+                </p>
+              )}
+              {!selectedDiffersFromSaved && inventoryStatus?.errorMessage && (
+                <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+                  {inventoryStatus.errorMessage}
+                </p>
+              )}
+            </div>
+
+            <form onSubmit={connectInventory} className="mt-4 grid gap-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Marketplace name"
+                  value={inventory.marketplaceName}
+                  onChange={(value) => setInventory((current) => ({ ...current, marketplaceName: value }))}
+                />
+                {inventory.connectionType !== "demo_snapshot" && (
+                  <Field
+                    label={requiresMarketplaceUrl(inventory.connectionType) ? "Marketplace URL" : "Marketplace URL (optional)"}
+                    required={requiresMarketplaceUrl(inventory.connectionType)}
+                    value={inventory.marketplaceUrl}
+                    onChange={(value) => setInventory((current) => ({ ...current, marketplaceUrl: value }))}
+                  />
+                )}
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Connection type</span>
+                  <select
+                    value={inventory.connectionType}
+                    onChange={(event) => updateConnectionType(event.target.value as InventoryConnectionType)}
+                    className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                  >
+                    <option value="marketplace_url">marketplace_url</option>
+                    <option value="api_key">api_key</option>
+                    <option value="bearer_token">bearer_token</option>
+                    <option value="csv_upload">csv_upload</option>
+                    <option value="json_upload">json_upload</option>
+                    <option value="demo_snapshot">demo_snapshot</option>
+                  </select>
+                </label>
+                <DisabledField label="Credential type" value={inventory.credentialType} />
+              </div>
+              {isCredentialConnection(inventory.connectionType) && (
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Secure credential input</span>
+                  <input
+                    type="password"
+                    value={inventory.credential}
+                    placeholder={inventory.connectionType === "api_key" ? "Enter API key" : "Enter bearer token"}
+                    onChange={(event) => setInventory((current) => ({ ...current, credential: event.target.value }))}
+                    className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                  />
+                </label>
+              )}
+              {isUploadConnection(inventory.connectionType) && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <label className="block">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      {inventory.connectionType === "csv_upload" ? "CSV upload" : "JSON upload"}
+                    </span>
+                    <input
+                      key={inventory.connectionType}
+                      type="file"
+                      accept={inventory.connectionType === "csv_upload" ? ".csv,text/csv" : ".json,application/json"}
+                      onChange={handleFileChange}
+                      className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-teal-700 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-teal-800"
+                    />
+                  </label>
+                  {(inventory.uploadedFileName || uploadMessage) && (
+                    <div className="mt-3 text-sm text-slate-700">
+                      {inventory.uploadedFileName && (
+                        <p>
+                          Selected file: {inventory.uploadedFileName} ({formatFileSize(inventory.uploadedFileSize)})
+                        </p>
+                      )}
+                      {uploadMessage && (
+                        <p className={inventory.uploadedFileName ? "mt-1 text-slate-600" : "text-amber-800"}>{uploadMessage}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {inventory.connectionType === "demo_snapshot" && (
+                <p className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                  Uses AMI demo inventory data for local testing.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <LinkIcon size={18} />
+                  {inventoryBusy === "connect" ? "Connecting..." : "Connect Inventory Source"}
+                </button>
+                <button
+                  type="button"
+                  onClick={resyncInventory}
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCw size={18} />
+                  {inventoryBusy === "sync" ? "Re-syncing..." : "Re-sync Inventory"}
+                </button>
+                <button
+                  type="button"
+                  onClick={removeInventory}
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Trash2 size={18} />
+                  {inventoryBusy === "remove" ? "Removing..." : "Remove Inventory Source"}
+                </button>
+              </div>
+            </form>
+          </Panel>
+
+          <Panel icon={<FileClock size={20} />} title="Saved reports">
+            <HistoryList
+              items={snapshot.savedReports ?? []}
+              empty="No saved reports yet. Reports saved from AMI Strategy will appear here."
+            />
+          </Panel>
+
+          <Panel icon={<CheckCircle2 size={20} />} title="Approved recommendation history">
+            <div className="space-y-3">
+              {(snapshot.approvedRecommendations ?? []).length === 0 && (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  No approved recommendations yet. Approved AMI recommendations will appear here after review.
+                </p>
+              )}
+              {(snapshot.approvedRecommendations ?? []).map((recommendation) => (
+                <div key={recommendation.recommendationId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="font-semibold text-slate-950">{recommendation.recommendedAction}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{recommendation.suggestedNextStep}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge tone="teal">{recommendation.confidenceLevel} confidence</Badge>
+                    <Badge tone={recommendation.riskLevel === "high" ? "red" : "amber"}>{recommendation.riskLevel} risk</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </details>
 
       <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-1 text-teal-700" size={20} />
           <p className="text-sm leading-6 text-slate-700">
-            Inventory credentials are encrypted with AES-256-GCM. API responses return only masked credential metadata and
-            fingerprints. Demo payment never stores full card numbers or CCV.
+            Inventory credentials and payment information are shown only as masked or mock data in the MVP. Real payment
+            processing is not active, and the system must not store full card numbers, CVV, or sensitive billing credentials.
           </p>
         </div>
       </section>
@@ -339,20 +727,35 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
+function DisabledField({ label, value }: { label: string; value: string }) {
+  return (
+    <label className="block">
+      <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
+      <input
+        disabled
+        value={value}
+        className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-500"
+      />
+    </label>
+  );
+}
+
 function Field({
   label,
   value,
-  onChange
+  onChange,
+  required = true
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  required?: boolean;
 }) {
   return (
     <label className="block">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
-        required
+        required={required}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"

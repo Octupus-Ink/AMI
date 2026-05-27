@@ -6,7 +6,9 @@ import type {
   AssistantFinding,
   EvidencePackage,
   MarketContextPayload,
-  Recommendation
+  Recommendation,
+  SourceMode,
+  SupplierOption
 } from "@/lib/schemas/ami";
 import {
   AnalysisResultSchema,
@@ -15,12 +17,22 @@ import {
   RecommendationSchema
 } from "@/lib/schemas/ami";
 
+export const INVENTORY_CONTEXT_UNAVAILABLE_WARNING =
+  "Inventory context was requested, but no usable inventory source is connected. AMI continued using trend, competitor, and supplier signals.";
+
+type InventoryRunContext = {
+  requested: boolean;
+  available: boolean;
+  warningMessage?: string;
+  sourceLabel?: string;
+};
+
 function riskFromGoal(goal: MarketContextPayload["businessGoal"]) {
-  if (goal === "reduce_stock_risk") {
+  if (goal === "stock_optimization") {
     return "medium" as const;
   }
 
-  if (goal === "validate_opportunity") {
+  if (goal === "discover_new_products") {
     return "low" as const;
   }
 
@@ -29,22 +41,33 @@ function riskFromGoal(goal: MarketContextPayload["businessGoal"]) {
 
 function actionFromGoal(context: MarketContextPayload) {
   const actions: Record<MarketContextPayload["businessGoal"], string> = {
-    increase_margin: `Prioritize sourcing review for ${context.productName}`,
-    capture_demand: `Prepare a demand capture test for ${context.productName}`,
-    reduce_stock_risk: `Rebalance inventory exposure for ${context.productName}`,
-    validate_opportunity: `Validate ${context.productName} before committing budget`
+    discover_new_products: `Prioritize sourcing review for ${context.productName}`,
+    stock_optimization: `Optimize stock movement for ${context.productName}`,
+    revenue_stock_opportunities: `Position ${context.productName} for revenue lift`
   };
 
   return actions[context.businessGoal];
 }
 
-function assistantContributions(mode: "live" | "demo_fallback", product: string): AssistantContribution[] {
+function assistantContributions(mode: SourceMode, product: string, inventoryContext: InventoryRunContext): AssistantContribution[] {
   const sourceLabel =
     mode === "live"
       ? "Bright Data live web intelligence"
       : "Bright Data-shaped demo fallback source snapshots";
+  const usesInventory = inventoryContext.requested && inventoryContext.available;
+  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
 
   return [
+    {
+      assistantId: "trend",
+      summary: `Validated demand momentum for ${product} with seasonal and social signal context.`,
+      latestContribution: "Detected rising search and social momentum, with seasonality supporting near-term demand.",
+      signalStrength: "strong",
+      confidence: "high",
+      risk: "low",
+      dataSourcesUsed: [sourceLabel, "Demand momentum snapshot"],
+      usageCost: 0.6
+    },
     {
       assistantId: "competitor",
       summary: "Detected moderate price pressure with room to protect margin.",
@@ -56,37 +79,61 @@ function assistantContributions(mode: "live" | "demo_fallback", product: string)
       usageCost: 0.8
     },
     {
-      assistantId: "inventory",
-      summary: "Reviewed stock posture and supplier margin context without exposing raw inventory records.",
-      latestContribution: "Flagged enough margin headroom to justify a controlled sourcing review.",
+      assistantId: "supplier",
+      summary: "Found viable supplier options with estimated costs, delivery windows, and manageable sourcing risk.",
+      latestContribution: "Compared supplier cost, availability, match confidence, and estimated delivery time.",
       signalStrength: "strong",
       confidence: "medium",
       risk: "medium",
-      dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
-      usageCost: 0.7
+      dataSourcesUsed: ["Verified supplier catalog", "Supplier pricing snapshot"],
+      usageCost: 0.9
     },
     {
-      assistantId: "trend",
-      summary: `Validated demand momentum for ${product} with seasonal and social signal context.`,
-      latestContribution: "Detected rising search and social momentum, with seasonality supporting near-term demand.",
-      signalStrength: "strong",
-      confidence: "high",
-      risk: "low",
-      dataSourcesUsed: [sourceLabel, "Demand momentum snapshot"],
-      usageCost: 0.6
+      assistantId: "inventory",
+      summary: inventoryUnavailable
+        ? "Inventory context was requested, but no usable source is connected."
+        : usesInventory
+          ? "Reviewed stock posture and supplier margin context without exposing raw inventory records."
+          : "Inventory Assistant was skipped because this goal can run without inventory context.",
+      latestContribution: inventoryUnavailable
+        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
+        : usesInventory
+          ? "Flagged enough margin headroom to justify a controlled sourcing review."
+          : "AMI used trend, competitor, and supplier signals without inventory context.",
+      signalStrength: usesInventory ? "strong" : "moderate",
+      confidence: "medium",
+      risk: "medium",
+      dataSourcesUsed: usesInventory
+        ? [inventoryContext.sourceLabel ?? "Workspace inventory context", "Supplier margin snapshot"]
+        : ["Inventory Assistant skipped", "Trend, competitor, and supplier signals"],
+      usageCost: usesInventory ? 0.7 : 0
     }
   ];
 }
 
 function assistantFindings(
   context: MarketContextPayload,
-  mode: "live" | "demo_fallback",
-  sourceLabel: string
+  mode: SourceMode,
+  sourceLabel: string,
+  inventoryContext: InventoryRunContext
 ): AssistantFinding[] {
   const dataFreshness =
     mode === "live" ? "Collected during this analysis run" : "Seeded demo snapshot refreshed for the MVP walkthrough";
+  const usesInventory = inventoryContext.requested && inventoryContext.available;
+  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
 
   return [
+    {
+      assistantId: "trend",
+      finding: "Demand momentum is strong enough to justify near-term validation.",
+      reason: "Search interest and social momentum support a short-cycle market test.",
+      signal: "strong",
+      confidence: "high",
+      risk: "low",
+      sourceType: sourceLabel,
+      sourceLabel: "Demand and social momentum snapshot",
+      dataFreshness
+    },
     {
       assistantId: "competitor",
       finding: "Competitor pressure is present but not blocking.",
@@ -99,30 +146,36 @@ function assistantFindings(
       dataFreshness
     },
     {
-      assistantId: "inventory",
-      finding: "Inventory context supports a controlled action, not a broad purchasing move.",
-      reason: context.useInventoryContext
-        ? "AMI used connected inventory context to keep the recommendation scoped to current operating posture."
-        : "AMI used supplier and margin context because no connected inventory source was selected.",
+      assistantId: "supplier",
+      finding: "Supplier options are available for a controlled sourcing review.",
+      reason: "Supplier cost, delivery estimates, and match confidence support a scoped validation step before scaling.",
       signal: "strong",
       confidence: "medium",
       risk: "medium",
-      sourceType: "Workspace inventory context",
-      sourceLabel: context.useInventoryContext ? "Connected inventory context" : "No inventory context selected",
-      dataFreshness: context.useInventoryContext
-        ? "Last inventory analysis timestamp is available in Account / Workspace"
-        : "No inventory sync was used for this run"
+      sourceType: "Supplier sourcing snapshot",
+      sourceLabel: "Verified supplier catalog",
+      dataFreshness: "Demo supplier snapshot prepared for this MVP"
     },
     {
-      assistantId: "trend",
-      finding: "Demand momentum is strong enough to justify near-term validation.",
-      reason: "Search interest and social momentum support a short-cycle market test.",
-      signal: "strong",
-      confidence: "high",
-      risk: "low",
-      sourceType: sourceLabel,
-      sourceLabel: "Demand and social momentum snapshot",
-      dataFreshness
+      assistantId: "inventory",
+      finding: inventoryUnavailable
+        ? "Inventory Assistant continued as a warning state."
+        : usesInventory
+          ? "Inventory context supports a controlled action, not a broad purchasing move."
+          : "Inventory Assistant was skipped for this optional inventory goal.",
+      reason: inventoryUnavailable
+        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
+        : usesInventory
+          ? "AMI used connected inventory context to keep the recommendation scoped to current operating posture."
+          : "AMI used supplier and margin context because no connected inventory source was selected.",
+      signal: usesInventory ? "strong" : "moderate",
+      confidence: "medium",
+      risk: "medium",
+      sourceType: "Workspace inventory context",
+      sourceLabel: usesInventory ? inventoryContext.sourceLabel ?? "Connected inventory context" : "No inventory context selected",
+      dataFreshness: usesInventory
+        ? "Last inventory analysis timestamp is available in Account / Workspace"
+        : "No inventory sync was used for this run"
     }
   ].map((finding) => AssistantFindingSchema.parse(finding));
 }
@@ -156,16 +209,42 @@ function buildEvidencePackage(
   });
 }
 
+function buildSupplierOptions(): SupplierOption[] {
+  return [
+    {
+      supplierName: "Northstar Supply Co.",
+      source: "Verified supplier catalog",
+      estimatedUnitCost: 18.4,
+      estimatedDeliveryTime: "8-12 days",
+      availability: "In stock",
+      ratingQualityProxy: "4.7 / 5 quality proxy",
+      matchConfidence: "high",
+      risk: "low"
+    },
+    {
+      supplierName: "Pacific Drinkware Direct",
+      source: "Supplier marketplace snapshot",
+      estimatedUnitCost: 16.9,
+      estimatedDeliveryTime: "14-21 days",
+      availability: "Limited batch",
+      ratingQualityProxy: "4.3 / 5 quality proxy",
+      matchConfidence: "medium",
+      risk: "medium"
+    }
+  ];
+}
+
 function buildRecommendation(
   workspaceId: string,
   analysisRunId: string,
   context: MarketContextPayload,
   evidencePackage: EvidencePackage,
-  mode: "live" | "demo_fallback"
+  mode: SourceMode,
+  inventoryContext: InventoryRunContext
 ): Recommendation {
   const riskLevel = riskFromGoal(context.businessGoal);
-  const contributions = assistantContributions(mode, context.productName);
-  const opportunityScore = context.useInventoryContext ? 84 : 78;
+  const contributions = assistantContributions(mode, context.productName, inventoryContext);
+  const opportunityScore = inventoryContext.requested && inventoryContext.available ? 84 : 78;
 
   return RecommendationSchema.parse({
     recommendationId: randomUUID(),
@@ -184,7 +263,7 @@ function buildRecommendation(
         : "Demo fallback uses seeded Bright Data-shaped source snapshots",
     matchQuality: evidencePackage.matchQuality,
     primaryReason:
-      "AMI detected a margin-backed opportunity with rising demand and manageable competitor pressure.",
+      "AMI detected a margin-backed opportunity with rising demand, viable supplier options, and manageable competitor pressure.",
     suggestedNextStep:
       "Run a controlled sourcing validation and confirm supplier delivery terms before scaling the action.",
     assistantContributions: contributions,
@@ -194,7 +273,11 @@ function buildRecommendation(
   });
 }
 
-export async function runAmiAnalysis(workspaceId: string, context: MarketContextPayload): Promise<AnalysisResult> {
+export async function runAmiAnalysis(
+  workspaceId: string,
+  context: MarketContextPayload,
+  inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext }
+): Promise<AnalysisResult> {
   const analysisRunId = randomUUID();
   const startedAt = new Date().toISOString();
   const [serpResult, scrapeResult] = await Promise.all([
@@ -204,8 +287,9 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
   const mode = scrapeResult.mode === "live" || serpResult.mode === "live" ? "live" : "demo_fallback";
   const completedAt = new Date().toISOString();
   const evidencePackage = buildEvidencePackage(context, mode, scrapeResult.product, completedAt);
-  const executiveRecommendation = buildRecommendation(workspaceId, analysisRunId, context, evidencePackage, mode);
-  const findings = assistantFindings(context, mode, scrapeResult.message);
+  const supplierOptions = buildSupplierOptions();
+  const executiveRecommendation = buildRecommendation(workspaceId, analysisRunId, context, evidencePackage, mode, inventoryContext);
+  const findings = assistantFindings(context, mode, scrapeResult.message, inventoryContext);
   const secondaryOpportunity = RecommendationSchema.parse({
     ...executiveRecommendation,
     recommendationId: randomUUID(),
@@ -225,9 +309,15 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
     startedAt,
     completedAt,
     assistantStatus: {
+      trend: "completed",
       competitor: "completed",
-      inventory: "completed",
-      trend: "completed"
+      supplier: "completed",
+      inventory:
+        inventoryContext.requested && inventoryContext.available
+          ? "completed"
+          : inventoryContext.warningMessage
+            ? "warning"
+            : "skipped",
     },
     sourceCollectionStatus: {
       brightDataProduct: mode === "live" ? scrapeResult.product : "Web Scraper API / SERP API",
@@ -242,6 +332,8 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
     opportunities: [executiveRecommendation, secondaryOpportunity],
     assistantFindings: findings,
     evidencePackages: [evidencePackage],
+    supplierOptions,
+    warnings: inventoryContext.warningMessage ? [inventoryContext.warningMessage] : [],
     demoMode: mode === "demo_fallback"
   });
 

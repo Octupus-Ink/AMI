@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const session = await login(parsed.data.email, parsed.data.password);
+    const session = await login(parsed.data.workspaceId, parsed.data.password);
     const response = NextResponse.json({ ok: true });
 
     setSessionCookie(response, session.token, session.expiresAt);

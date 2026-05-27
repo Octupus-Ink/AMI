@@ -30,13 +30,24 @@ export const demoMarketContext: MarketContextPayload = {
   category: "Drinkware",
   targetMarketplace: "Amazon",
   supplierSource: "Verified supplier catalog",
-  businessGoal: "increase_margin",
+  businessGoal: "discover_new_products",
   region: "United States",
   currency: "USD",
   useInventoryContext: true
 };
 
 export const demoAssistantUsage: AssistantUsage[] = [
+  {
+    assistantId: "trend",
+    usageCount: 10,
+    creditLimit: 130,
+    creditsUsed: 47,
+    estimatedUsageCost: 4.7,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Validated demand momentum, seasonality, and social signal direction.",
+    dataSourcesUsed: ["Bright Data SERP API demo fallback", "Social momentum snapshot"],
+    alertState: "normal"
+  },
   {
     assistantId: "competitor",
     usageCount: 12,
@@ -49,6 +60,17 @@ export const demoAssistantUsage: AssistantUsage[] = [
     alertState: "normal"
   },
   {
+    assistantId: "supplier",
+    usageCount: 8,
+    creditLimit: 100,
+    creditsUsed: 63,
+    estimatedUsageCost: 6.3,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Found viable supplier options with estimated unit cost and delivery windows.",
+    dataSourcesUsed: ["Supplier catalog demo snapshot", "Bright Data marketplace source footprint"],
+    alertState: "normal"
+  },
+  {
     assistantId: "inventory",
     usageCount: 9,
     creditLimit: 100,
@@ -58,17 +80,6 @@ export const demoAssistantUsage: AssistantUsage[] = [
     latestContribution: "Reviewed stock posture, margin context, and sourcing risk.",
     dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
     alertState: "near_limit"
-  },
-  {
-    assistantId: "trend",
-    usageCount: 10,
-    creditLimit: 130,
-    creditsUsed: 47,
-    estimatedUsageCost: 4.7,
-    lastRun: "2026-05-26T18:10:00.000Z",
-    latestContribution: "Validated demand momentum and seasonal lift.",
-    dataSourcesUsed: ["Bright Data SERP API demo fallback", "Social momentum snapshot"],
-    alertState: "normal"
   }
 ];
 
@@ -82,7 +93,11 @@ export const demoCredits = {
 export const demoInventoryStatus = {
   workspaceId: demoWorkspace.id,
   connected: true,
-  latestConnectionLabel: "Demo snapshot - Amazon inventory context",
+  marketplaceName: "Amazon",
+  marketplaceUrl: "",
+  connectionType: "demo_snapshot",
+  credentialType: "demo_snapshot",
+  latestConnectionLabel: "Amazon - demo_snapshot",
   lastSyncAt: "2026-05-26T20:45:44.000Z",
   lastAnalysisAt: "2026-05-26T20:45:44.000Z",
   status: "demo_snapshot"
