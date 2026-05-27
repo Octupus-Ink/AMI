@@ -93,6 +93,16 @@ function isValidUrl(value: unknown): value is string {
 function buildAssistantContributions() {
   return [
     {
+      assistantId: "trend" as const,
+      summary: "Demand was estimated from Amazon marketplace proxy signals.",
+      latestContribution: "Used rating, reviews, bought-past-month, and search rank as trend proxies.",
+      signalStrength: "strong" as const,
+      confidence: "medium" as const,
+      risk: "medium" as const,
+      dataSourcesUsed: ["Amazon rating", "Amazon reviews", "Amazon bought_past_month", "Amazon search rank"],
+      usageCost: 6
+    },
+    {
       assistantId: "competitor" as const,
       summary: "Amazon marketplace pressure was evaluated from Bright Data search results.",
       latestContribution: "Compared price, ranking, rating, review volume, and sponsorship signals.",
@@ -103,6 +113,16 @@ function buildAssistantContributions() {
       usageCost: 8
     },
     {
+      assistantId: "supplier" as const,
+      summary: "Supplier feasibility is represented with a validation-ready supplier comparison layer.",
+      latestContribution: "Prepared supplier cost, delivery window, availability, match confidence, and sourcing risk checks.",
+      signalStrength: "moderate" as const,
+      confidence: "medium" as const,
+      risk: "medium" as const,
+      dataSourcesUsed: ["Supplier validation pending", "Demo supplier context"],
+      usageCost: 9
+    },
+    {
       assistantId: "inventory" as const,
       summary: "Inventory impact is treated as pending until a connected inventory source is available.",
       latestContribution: "Marked supplier and inventory validation as the next operational step.",
@@ -111,16 +131,6 @@ function buildAssistantContributions() {
       risk: "medium" as const,
       dataSourcesUsed: ["Demo inventory context"],
       usageCost: 7
-    },
-    {
-      assistantId: "trend" as const,
-      summary: "Demand was estimated from Amazon marketplace proxy signals.",
-      latestContribution: "Used rating, reviews, bought-past-month, and search rank as trend proxies.",
-      signalStrength: "strong" as const,
-      confidence: "medium" as const,
-      risk: "medium" as const,
-      dataSourcesUsed: ["Amazon rating", "Amazon reviews", "Amazon bought_past_month", "Amazon search rank"],
-      usageCost: 6
     }
   ];
 }
@@ -230,7 +240,7 @@ async function main() {
     };
   });
 
-  const recommendations = rawOpportunities.map((opportunity, index) => {
+  const recommendations = rawOpportunities.map((opportunity) => {
     const score = clamp(opportunity.scores?.opportunityScore || 0);
     const demandScore = clamp(opportunity.scores?.demandScore || 0);
     const confidenceScore = clamp(opportunity.scores?.confidenceScore || 0);
@@ -253,6 +263,7 @@ async function main() {
       confidenceLevel: toConfidence(confidenceScore),
       signalStrength: toSignal(score),
       dataFreshness: "Bright Data raw import",
+      matchQuality: toConfidence(confidenceScore),
       primaryReason: cleanText(
         opportunity.recommendation?.reasoningSummary,
         "Bright Data marketplace signals indicate this product deserves review.",
@@ -272,6 +283,17 @@ async function main() {
 
   const assistantFindings = [
     {
+      assistantId: "trend" as const,
+      finding: "Trend strength was estimated from Amazon demand proxies such as bought-past-month, rating, review count, and rank.",
+      reason: "These signals provide a practical MVP-level demand estimate without requiring social commerce data.",
+      signal: "strong" as const,
+      confidence: "medium" as const,
+      risk: "medium" as const,
+      sourceType: "marketplace_demand_proxy",
+      sourceLabel: "Amazon demand signals",
+      dataFreshness: "Imported raw Bright Data output"
+    },
+    {
       assistantId: "competitor" as const,
       finding: "Bright Data Amazon Search returned marketplace product candidates with price, rank, rating, and demand proxy signals.",
       reason: "The imported dataset provides competitor and marketplace evidence for recommendation scoring.",
@@ -283,6 +305,17 @@ async function main() {
       dataFreshness: "Imported raw Bright Data output"
     },
     {
+      assistantId: "supplier" as const,
+      finding: "Supplier comparison is prepared as a required AMI v1.1 validation layer.",
+      reason: "The imported marketplace run can rank demand, while supplier cost, delivery, and risk still need final validation.",
+      signal: "moderate" as const,
+      confidence: "medium" as const,
+      risk: "medium" as const,
+      sourceType: "supplier_context",
+      sourceLabel: "Supplier validation pending",
+      dataFreshness: "Demo supplier context"
+    },
+    {
       assistantId: "inventory" as const,
       finding: "Inventory validation is still pending because no connected inventory source was used for this imported run.",
       reason: "The system can recommend opportunities, but supplier and internal stock context must be validated before execution.",
@@ -292,17 +325,6 @@ async function main() {
       sourceType: "inventory_context",
       sourceLabel: "Demo inventory context",
       dataFreshness: "Demo context"
-    },
-    {
-      assistantId: "trend" as const,
-      finding: "Trend strength was estimated from Amazon demand proxies such as bought-past-month, rating, review count, and rank.",
-      reason: "These signals provide a practical MVP-level demand estimate without requiring social commerce data.",
-      signal: "strong" as const,
-      confidence: "medium" as const,
-      risk: "medium" as const,
-      sourceType: "marketplace_demand_proxy",
-      sourceLabel: "Amazon demand signals",
-      dataFreshness: "Imported raw Bright Data output"
     }
   ];
 
@@ -311,7 +333,7 @@ async function main() {
     category: cleanText(topOpportunity.keyword, "Marketplace products", 120),
     targetMarketplace: "Amazon",
     supplierSource: "Supplier validation pending",
-    businessGoal: "validate_opportunity" as const,
+    businessGoal: "discover_new_products" as const,
     region: "United States",
     currency: topOpportunity.evidence?.currency || "USD",
     useInventoryContext: false
@@ -327,9 +349,10 @@ async function main() {
       : now,
     completedAt: now,
     assistantStatus: {
+      trend: "completed" as const,
       competitor: "completed" as const,
+      supplier: "completed" as const,
       inventory: "completed" as const,
-      trend: "completed" as const
     },
     sourceCollectionStatus: {
       brightDataProduct: "Web Scraper API",
@@ -341,6 +364,18 @@ async function main() {
     opportunities: recommendations,
     assistantFindings,
     evidencePackages,
+    supplierOptions: [
+      {
+        supplierName: "Supplier validation pending",
+        source: "Supplier validation pending",
+        estimatedUnitCost: 0,
+        estimatedDeliveryTime: "Validation required",
+        availability: "Pending",
+        ratingQualityProxy: "Pending",
+        matchConfidence: "medium" as const,
+        risk: "medium" as const
+      }
+    ],
     demoMode: true
   };
 
@@ -352,7 +387,12 @@ async function main() {
       workspaceId,
       "data.evidencePackageId": { $in: evidencePackages.map((item) => item.evidencePackageId) }
     }),
-    AssistantRun.deleteMany({ workspaceId, "data.sourceLabel": { $in: ["Bright Data Amazon Search", "Amazon demand signals", "Demo inventory context"] } }),
+    AssistantRun.deleteMany({
+      workspaceId,
+      "data.sourceLabel": {
+        $in: ["Bright Data Amazon Search", "Amazon demand signals", "Supplier validation pending", "Demo inventory context"]
+      }
+    }),
     RawSourceSnapshot.deleteMany({ workspaceId, "data.label": "Bright Data Amazon Search raw import" })
   ]);
 
@@ -367,6 +407,17 @@ async function main() {
 
   const usageRows = [
     {
+      assistantId: "trend" as const,
+      usageCount: 1,
+      creditLimit: 100,
+      creditsUsed: 6,
+      estimatedUsageCost: 0.6,
+      lastRun: now,
+      latestContribution: "Estimated demand from Amazon rating, reviews, bought-past-month, and ranking signals.",
+      dataSourcesUsed: ["Amazon demand proxies", "Bright Data Amazon Search"],
+      alertState: "normal" as const
+    },
+    {
       assistantId: "competitor" as const,
       usageCount: 1,
       creditLimit: 100,
@@ -378,6 +429,17 @@ async function main() {
       alertState: "normal" as const
     },
     {
+      assistantId: "supplier" as const,
+      usageCount: 1,
+      creditLimit: 100,
+      creditsUsed: 9,
+      estimatedUsageCost: 0.9,
+      lastRun: now,
+      latestContribution: "Prepared supplier validation checks for cost, delivery, availability, and sourcing risk.",
+      dataSourcesUsed: ["Supplier validation pending", "Demo supplier context"],
+      alertState: "normal" as const
+    },
+    {
       assistantId: "inventory" as const,
       usageCount: 1,
       creditLimit: 100,
@@ -386,17 +448,6 @@ async function main() {
       lastRun: now,
       latestContribution: "Marked supplier and inventory validation as the next operational step.",
       dataSourcesUsed: ["Demo inventory context"],
-      alertState: "normal" as const
-    },
-    {
-      assistantId: "trend" as const,
-      usageCount: 1,
-      creditLimit: 100,
-      creditsUsed: 6,
-      estimatedUsageCost: 0.6,
-      lastRun: now,
-      latestContribution: "Estimated demand from Amazon rating, reviews, bought-past-month, and ranking signals.",
-      dataSourcesUsed: ["Amazon demand proxies", "Bright Data Amazon Search"],
       alertState: "normal" as const
     }
   ];

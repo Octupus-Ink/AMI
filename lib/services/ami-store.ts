@@ -340,13 +340,29 @@ export async function createSession(userId: string, workspaceId: string) {
 }
 
 export async function login(email: string, password: string) {
+  const identifier = email.trim();
+  const normalizedEmail = identifier.toLowerCase();
+
   if (await databaseReady()) {
-    const user = (await User.findOne({ email }).lean()) as
+    let user = (await User.findOne({ email: normalizedEmail }).lean()) as
       | { _id: unknown; name: string; email: string; passwordHash: string }
       | null;
 
+    if (!user) {
+      const objectIdCandidate = /^[a-f\d]{24}$/i.test(identifier) ? [{ _id: identifier }] : [];
+      const workspace = (await Workspace.findOne({
+        $or: [{ workspaceName: identifier }, ...objectIdCandidate]
+      }).lean()) as { createdByUserId?: string } | null;
+
+      if (workspace?.createdByUserId) {
+        user = (await User.findById(workspace.createdByUserId).lean()) as
+          | { _id: unknown; name: string; email: string; passwordHash: string }
+          | null;
+      }
+    }
+
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
-      throw new Error("Invalid email or password");
+      throw new Error("Invalid workspace ID or password");
     }
 
     const workspace = (await Workspace.findOne({ createdByUserId: String(user._id) }).lean()) as
@@ -361,10 +377,15 @@ export async function login(email: string, password: string) {
   }
 
   const store = getDemoStore();
-  const user = store.users.find((candidate) => candidate.email === email);
+  const workspaceByIdentifier = store.workspaces.find(
+    (candidate) => candidate.id === identifier || candidate.workspaceName === identifier
+  );
+  const user = store.users.find(
+    (candidate) => candidate.email === normalizedEmail || candidate.id === workspaceByIdentifier?.createdByUserId
+  );
 
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    throw new Error("Invalid email or password");
+    throw new Error("Invalid workspace ID or password");
   }
 
   const workspace = store.workspaces.find((candidate) => candidate.createdByUserId === user.id);
@@ -377,9 +398,108 @@ export async function login(email: string, password: string) {
 }
 
 export async function createDemoSession() {
+  if (await databaseReady()) {
+    let user = (await User.findOne({ email: demoUser.email }).lean()) as
+      | { _id: unknown; name: string; email: string }
+      | null;
+
+    if (!user) {
+      const createdUser = await User.create({
+        name: demoUser.name,
+        email: demoUser.email,
+        passwordHash: await hashPassword("demo-workspace-password")
+      });
+      user = {
+        _id: createdUser._id,
+        name: createdUser.name,
+        email: createdUser.email
+      };
+    }
+
+    const userId = String(user._id);
+    let workspace = (await Workspace.findOne({ createdByUserId: userId }).lean()) as
+      | { _id: unknown; workspaceName: string; workspaceType: string; defaultRegion: string; defaultCurrency: string; createdByUserId: string }
+      | null;
+
+    if (!workspace) {
+      const createdWorkspace = await Workspace.create({
+        workspaceName: demoWorkspace.workspaceName,
+        workspaceType: demoWorkspace.workspaceType,
+        defaultRegion: demoWorkspace.defaultRegion,
+        defaultCurrency: demoWorkspace.defaultCurrency,
+        createdByUserId: userId
+      });
+      workspace = {
+        _id: createdWorkspace._id,
+        workspaceName: createdWorkspace.workspaceName,
+        workspaceType: createdWorkspace.workspaceType,
+        defaultRegion: createdWorkspace.defaultRegion,
+        defaultCurrency: createdWorkspace.defaultCurrency,
+        createdByUserId: createdWorkspace.createdByUserId
+      };
+    }
+
+    const workspaceId = String(workspace._id);
+
+    await Promise.all([
+      MarketplaceProfile.findOneAndUpdate(
+        { workspaceId },
+        {
+          workspaceId,
+          businessName: demoMarketplaceProfile.businessName,
+          businessType: demoMarketplaceProfile.businessType,
+          primaryMarketplace: demoMarketplaceProfile.primaryMarketplace,
+          mainProductCategory: demoMarketplaceProfile.mainProductCategory,
+          targetRegion: demoMarketplaceProfile.targetRegion,
+          defaultCurrency: demoMarketplaceProfile.defaultCurrency
+        },
+        { upsert: true, new: true }
+      ),
+      ...defaultAssistantUsage(workspaceId).map((usage) =>
+        AssistantUsageModel.findOneAndUpdate(
+          { workspaceId, "data.assistantId": usage.assistantId },
+          { workspaceId, data: usage },
+          { upsert: true, new: true }
+        )
+      ),
+      WorkspaceCredit.findOneAndUpdate(
+        { workspaceId },
+        {
+          workspaceId,
+          data: {
+            workspaceId,
+            balance: demoCredits.balance,
+            initialDemoCredits: demoCredits.initialDemoCredits,
+            lastLedgerEvent: demoCredits.lastLedgerEvent
+          }
+        },
+        { upsert: true, new: true }
+      ),
+      InventorySyncStatus.findOneAndUpdate(
+        { workspaceId },
+        {
+          workspaceId,
+          data: {
+            ...demoInventoryStatus,
+            workspaceId
+          }
+        },
+        { upsert: true, new: true }
+      )
+    ]);
+
+    const session = await createSession(userId, workspaceId);
+
+    return {
+      session,
+      user: { id: userId, name: user.name, email: user.email },
+      workspace: { id: workspaceId, ...workspace, createdByUserId: userId }
+    };
+  }
+
   const store = getDemoStore();
   const session = await createSession(demoUser.id, demoWorkspace.id);
-  const hasDemoUsage = store.assistantUsage.some((usage) => usage.assistantId === "competitor");
+  const hasDemoUsage = store.assistantUsage.some((usage) => usage.assistantId === "trend");
 
   if (!hasDemoUsage) {
     store.assistantUsage.push(...demoAssistantUsage);
@@ -566,9 +686,10 @@ export async function getAnalysisResult(workspaceId: string, analysisRunId: stri
 
 async function updateAssistantUsageAfterRun(workspaceId: string, result: AnalysisResult) {
   const costs: Record<AssistantId, number> = {
+    trend: 6,
     competitor: 8,
+    supplier: 9,
     inventory: 7,
-    trend: 6
   };
 
   if (await databaseReady()) {
@@ -620,15 +741,40 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
 }
 
 export async function getAssistantUsage(workspaceId: string) {
+  const defaults = defaultAssistantUsage(workspaceId);
+
   if (await databaseReady()) {
     const usage = (await AssistantUsageModel.find({ workspaceId }).lean()) as Array<{ data: AssistantUsage }>;
-    return usage.map((entry) => entry.data);
+    const existing = usage.map((entry) => entry.data);
+    const missing = defaults.filter(
+      (defaultUsage) => !existing.some((entry) => entry.assistantId === defaultUsage.assistantId)
+    );
+
+    if (missing.length) {
+      await Promise.all(
+        missing.map((item) =>
+          AssistantUsageModel.create({
+            workspaceId,
+            data: item
+          })
+        )
+      );
+    }
+
+    return [...existing, ...missing];
   }
 
-  return getDemoStore().assistantUsage.filter((usage) => {
+  const store = getDemoStore();
+  const existing = store.assistantUsage.filter((usage) => {
     const usageWithWorkspace = usage as AssistantUsage & { workspaceId?: string };
     return !usageWithWorkspace.workspaceId || usageWithWorkspace.workspaceId === workspaceId;
   });
+  const missing = defaults.filter(
+    (defaultUsage) => !existing.some((entry) => entry.assistantId === defaultUsage.assistantId)
+  );
+
+  store.assistantUsage.push(...missing);
+  return [...existing, ...missing];
 }
 
 export async function updateAssistantLimit(workspaceId: string, assistantId: AssistantId, creditLimit: number) {
@@ -688,6 +834,11 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
     return {
       workspace,
       marketplaceProfile,
+      linkedServices: {
+        brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_fallback",
+        connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo fallback",
+        lastCredentialCheck: new Date().toISOString()
+      },
       credits: credits?.data,
       inventoryStatus: inventoryStatus?.data ?? {
         workspaceId,
@@ -707,6 +858,11 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
   return {
     workspace: store.workspaces.find((workspace) => workspace.id === workspaceId),
     marketplaceProfile: store.marketplaceProfiles.find((profile) => profile.workspaceId === workspaceId),
+    linkedServices: {
+      brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_fallback",
+      connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo fallback",
+      lastCredentialCheck: new Date().toISOString()
+    },
     credits: store.workspaceCredits.find((credits) => credits.workspaceId === workspaceId),
     inventoryStatus:
       store.inventorySyncStatus.find((status) => status.workspaceId === workspaceId) ??

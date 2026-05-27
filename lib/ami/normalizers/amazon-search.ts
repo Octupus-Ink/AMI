@@ -22,6 +22,7 @@ export type AmazonSearchRawRecord = {
   is_prime?: boolean | null;
   is_coupon?: boolean | null;
   total_results?: number | null;
+  error_code?: string | null;
   timestamp?: string | null;
   input?: Record<string, unknown> | null;
 };
