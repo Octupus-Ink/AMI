@@ -1,24 +1,27 @@
 import { demoCompetitorSnapshot, demoSerpResults } from "@/lib/demo/data";
 
-type BrightDataResponse<T> = {
-  source: "bright-data" | "demo-fallback";
+export type BrightDataMode = "live" | "demo_fallback";
+
+export type BrightDataResponse<T> = {
+  mode: BrightDataMode;
+  product: "SERP API" | "Web Scraper API" | "Web Unlocker";
   data: T;
-  message?: string;
+  message: string;
 };
 
 function hasBrightDataCredentials() {
   return Boolean(process.env.BRIGHT_DATA_API_KEY?.trim());
 }
 
-async function brightDataFetch<T>(endpoint: string, body: Record<string, unknown>): Promise<BrightDataResponse<T>> {
+async function brightDataFetch<T>(
+  endpoint: string,
+  product: BrightDataResponse<T>["product"],
+  body: Record<string, unknown>
+): Promise<BrightDataResponse<T>> {
   const apiKey = process.env.BRIGHT_DATA_API_KEY;
 
   if (!apiKey || !endpoint) {
-    return {
-      source: "demo-fallback",
-      data: {} as T,
-      message: "Bright Data credentials or endpoint are missing"
-    };
+    throw new Error("Bright Data endpoint or API key is missing");
   }
 
   const response = await fetch(endpoint, {
@@ -31,50 +34,44 @@ async function brightDataFetch<T>(endpoint: string, body: Record<string, unknown
   });
 
   if (!response.ok) {
-    throw new Error(`Bright Data request failed with ${response.status}`);
+    throw new Error(`Bright Data ${product} request failed with status ${response.status}`);
   }
 
   return {
-    source: "bright-data",
-    data: (await response.json()) as T
+    mode: "live",
+    product,
+    data: (await response.json()) as T,
+    message: `Live Bright Data ${product} response`
   };
 }
 
 export async function searchSERP(query: string): Promise<BrightDataResponse<typeof demoSerpResults>> {
   if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_SERP_ENDPOINT) {
     return {
-      source: "demo-fallback",
+      mode: "demo_fallback",
+      product: "SERP API",
       data: demoSerpResults,
-      message: "Using demo SERP results because Bright Data SERP credentials are not configured"
+      message: "Bright Data SERP API is represented with a seeded demo fallback because live credentials are not configured."
     };
   }
 
-  return brightDataFetch<typeof demoSerpResults>(process.env.BRIGHT_DATA_SERP_ENDPOINT, {
+  return brightDataFetch<typeof demoSerpResults>(process.env.BRIGHT_DATA_SERP_ENDPOINT, "SERP API", {
     query,
     parse: true
   });
 }
 
 export async function scrapeProductPage(url: string): Promise<BrightDataResponse<typeof demoCompetitorSnapshot>> {
-  if (!hasBrightDataCredentials()) {
+  if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT) {
     return {
-      source: "demo-fallback",
+      mode: "demo_fallback",
+      product: "Web Scraper API",
       data: demoCompetitorSnapshot,
-      message: "Using demo product scrape results because Bright Data credentials are not configured"
+      message: "Bright Data Web Scraper API is represented with a seeded demo fallback because live credentials are not configured."
     };
   }
 
-  const endpoint = process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT || process.env.BRIGHT_DATA_SERP_ENDPOINT;
-
-  if (!endpoint) {
-    return {
-      source: "demo-fallback",
-      data: demoCompetitorSnapshot,
-      message: "Using demo product scrape results because the scraper endpoint is not configured"
-    };
-  }
-
-  return brightDataFetch<typeof demoCompetitorSnapshot>(endpoint, {
+  return brightDataFetch<typeof demoCompetitorSnapshot>(process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT, "Web Scraper API", {
     url,
     parse: true
   });
@@ -83,13 +80,14 @@ export async function scrapeProductPage(url: string): Promise<BrightDataResponse
 export async function unlockUrl(url: string): Promise<BrightDataResponse<{ url: string; html?: string }>> {
   if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT) {
     return {
-      source: "demo-fallback",
+      mode: "demo_fallback",
+      product: "Web Unlocker",
       data: { url },
-      message: "Using demo unlock result because Bright Data Web Unlocker is not configured"
+      message: "Bright Data Web Unlocker is represented with a demo fallback because live credentials are not configured."
     };
   }
 
-  return brightDataFetch<{ url: string; html?: string }>(process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT, {
+  return brightDataFetch<{ url: string; html?: string }>(process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT, "Web Unlocker", {
     url
   });
 }

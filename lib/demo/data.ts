@@ -1,142 +1,128 @@
-import type { MarketplaceProject, RecentRun } from "@/lib/schemas/api";
-
-const now = new Date().toISOString();
-
-type DemoTrendSignal = {
-  productName: string;
-  trendScore: number;
-  marketStatus: "declining" | "stable" | "growing" | "viral";
-  seasonality: "low" | "medium" | "high";
-  demandSignal: "weak" | "moderate" | "strong";
-  searchVolumeChange: number;
-};
+import type { AssistantUsage, MarketContextPayload, Recommendation } from "@/lib/schemas/ami";
 
 export const demoUser = {
-  email: "demo@marketplace.ai",
-  name: "Demo Operator",
-  role: "founder",
-  createdAt: now
+  id: "demo-user",
+  name: "AMI Demo Operator",
+  email: "demo@ami.local"
 };
 
-export const demoProject: MarketplaceProject = {
-  id: "demo-project-1",
-  userId: "demo-user-1",
-  name: "Northstar Outdoor Gear",
-  category: "Outdoor and travel accessories",
-  targetMarket: "United States",
-  trackedCompetitors: ["TrailPeak", "PackForge", "CampNest"],
-  products: [
-    {
-      id: "prod-1",
-      name: "TrailLite Daypack 24L",
-      sku: "TL-DAY-24",
-      price: 79,
-      cost: 38,
-      currentStock: 420,
-      targetStock: 250,
-      monthlySales: 92
-    },
-    {
-      id: "prod-2",
-      name: "HydroSteel Bottle 32oz",
-      sku: "HS-BOT-32",
-      price: 34,
-      cost: 16,
-      currentStock: 58,
-      targetStock: 180,
-      monthlySales: 210
-    },
-    {
-      id: "prod-3",
-      name: "SummitDry Packing Cubes",
-      sku: "SD-CUBE-4",
-      price: 42,
-      cost: 18,
-      currentStock: 310,
-      targetStock: 190,
-      monthlySales: 44
-    }
-  ],
-  createdAt: now,
-  updatedAt: now
+export const demoWorkspace = {
+  id: "demo-workspace",
+  workspaceName: "AMI Demo Workspace",
+  workspaceType: "Marketplace operator",
+  defaultRegion: "United States",
+  defaultCurrency: "USD",
+  createdByUserId: demoUser.id
 };
 
-export const demoCompetitorSnapshot = [
+export const demoMarketplaceProfile = {
+  workspaceId: demoWorkspace.id,
+  businessName: "Northstar Marketplace",
+  businessType: "Marketplace operator",
+  primaryMarketplace: "Amazon",
+  mainProductCategory: "Home and kitchen",
+  targetRegion: "United States",
+  defaultCurrency: "USD"
+};
+
+export const demoMarketContext: MarketContextPayload = {
+  productName: "Insulated stainless steel tumbler",
+  category: "Drinkware",
+  targetMarketplace: "Amazon",
+  supplierSource: "Verified supplier catalog",
+  businessGoal: "increase_margin",
+  region: "United States",
+  currency: "USD",
+  useInventoryContext: true
+};
+
+export const demoAssistantUsage: AssistantUsage[] = [
   {
-    competitorName: "TrailPeak",
-    productName: "TrailLite Daypack 24L",
-    price: 69,
-    stockStatus: "in_stock" as const,
-    listPrice: 89,
-    deliveryEstimate: "2-4 days"
+    assistantId: "competitor",
+    usageCount: 12,
+    creditLimit: 120,
+    creditsUsed: 82,
+    estimatedUsageCost: 8.2,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Compared competitor pricing, promotion pressure, and availability.",
+    dataSourcesUsed: ["Bright Data SERP API demo fallback", "Marketplace product snapshot"],
+    alertState: "normal"
   },
   {
-    competitorName: "PackForge",
-    productName: "HydroSteel Bottle 32oz",
-    price: 37,
-    stockStatus: "out_of_stock" as const,
-    listPrice: 37,
-    deliveryEstimate: "Unavailable"
+    assistantId: "inventory",
+    usageCount: 9,
+    creditLimit: 100,
+    creditsUsed: 91,
+    estimatedUsageCost: 9.1,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Reviewed stock posture, margin context, and sourcing risk.",
+    dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
+    alertState: "near_limit"
   },
   {
-    competitorName: "CampNest",
-    productName: "SummitDry Packing Cubes",
-    price: 36,
-    stockStatus: "low_stock" as const,
-    listPrice: 44,
-    deliveryEstimate: "5-7 days"
+    assistantId: "trend",
+    usageCount: 10,
+    creditLimit: 130,
+    creditsUsed: 47,
+    estimatedUsageCost: 4.7,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Validated demand momentum and seasonal lift.",
+    dataSourcesUsed: ["Bright Data SERP API demo fallback", "Social momentum snapshot"],
+    alertState: "normal"
   }
 ];
 
-export const demoTrendSignals: DemoTrendSignal[] = [
+export const demoCredits = {
+  workspaceId: demoWorkspace.id,
+  balance: 250,
+  initialDemoCredits: 250,
+  lastLedgerEvent: "Initial demo grant"
+};
+
+export const demoInventoryStatus = {
+  workspaceId: demoWorkspace.id,
+  connected: true,
+  latestConnectionLabel: "Demo snapshot - Amazon inventory context",
+  lastSyncAt: "2026-05-26T20:45:44.000Z",
+  lastAnalysisAt: "2026-05-26T20:45:44.000Z",
+  status: "demo_snapshot"
+};
+
+export const demoSavedReports = [
   {
-    productName: "TrailLite Daypack 24L",
-    trendScore: 41,
-    marketStatus: "declining" as const,
-    seasonality: "medium" as const,
-    demandSignal: "weak" as const,
-    searchVolumeChange: -14
-  },
-  {
-    productName: "HydroSteel Bottle 32oz",
-    trendScore: 86,
-    marketStatus: "growing" as const,
-    seasonality: "high" as const,
-    demandSignal: "strong" as const,
-    searchVolumeChange: 31
-  },
-  {
-    productName: "SummitDry Packing Cubes",
-    trendScore: 52,
-    marketStatus: "stable" as const,
-    seasonality: "low" as const,
-    demandSignal: "moderate" as const,
-    searchVolumeChange: 3
+    id: "saved-report-demo",
+    title: "Drinkware opportunity review",
+    createdAt: "2026-05-26T20:55:00.000Z",
+    status: "saved"
   }
 ];
+
+export const demoApprovedRecommendations: Recommendation[] = [];
 
 export const demoSerpResults = [
   {
-    title: "Best travel gear deals this week",
-    url: "https://example.com/demo/travel-gear",
-    snippet: "Daypacks show softening demand while insulated bottles continue trending up.",
-    source: "demo-fallback"
+    title: "Amazon insulated tumbler marketplace listing",
+    url: "https://www.amazon.com/s?k=insulated+tumbler",
+    sourceMarketplace: "Amazon",
+    priceSignal: 29.99,
+    freshness: "Demo snapshot seeded for Bright Data-shaped SERP output"
   },
   {
-    title: "Outdoor accessories marketplace snapshot",
-    url: "https://example.com/demo/marketplace-snapshot",
-    snippet: "Several competitors are discounting packing organizers and entry-level daypacks.",
-    source: "demo-fallback"
+    title: "Shopping trend results for insulated tumbler",
+    url: "https://www.google.com/search?q=insulated+tumbler+trend",
+    sourceMarketplace: "Google Search",
+    priceSignal: 31.5,
+    freshness: "Demo snapshot seeded for Bright Data-shaped SERP output"
   }
 ];
 
-export const demoRecentRuns: RecentRun[] = [
-  {
-    id: "demo-historical-1",
-    status: "completed",
-    startedAt: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
-    completedAt: new Date(Date.now() - 1000 * 60 * 60 * 6 + 1000 * 14).toISOString(),
-    finalScore: 73,
-    summary: "Demo historical run: healthy demand with two inventory risks."
-  }
-];
+export const demoCompetitorSnapshot = {
+  sourceMarketplace: "Amazon",
+  sourceUrl: "https://www.amazon.com/s?k=insulated+tumbler",
+  productIdentity: "Insulated stainless steel tumbler, 40 oz",
+  currentPrice: 29.99,
+  competitorPriceMedian: 34.5,
+  promotionPressure: "moderate",
+  availability: "in_stock",
+  scrapedAt: "2026-05-26T20:50:00.000Z"
+};

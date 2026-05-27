@@ -1,22 +1,23 @@
-type BadgeTone = "slate" | "cyan" | "emerald" | "amber" | "rose";
+type BadgeTone = "neutral" | "blue" | "teal" | "amber" | "red" | "green";
 
-const toneClass: Record<BadgeTone, string> = {
-  slate: "border-slate-600 bg-slate-800/80 text-slate-200",
-  cyan: "border-cyan-300/30 bg-cyan-300/10 text-cyan-100",
-  emerald: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
-  amber: "border-amber-300/30 bg-amber-300/10 text-amber-100",
-  rose: "border-rose-300/30 bg-rose-300/10 text-rose-100"
+const tones: Record<BadgeTone, string> = {
+  neutral: "border-slate-200 bg-white text-slate-700",
+  blue: "border-blue-200 bg-blue-50 text-blue-800",
+  teal: "border-teal-200 bg-teal-50 text-teal-800",
+  amber: "border-amber-200 bg-amber-50 text-amber-800",
+  red: "border-red-200 bg-red-50 text-red-800",
+  green: "border-emerald-200 bg-emerald-50 text-emerald-800"
 };
 
 export function Badge({
   children,
-  tone = "slate"
+  tone = "neutral"
 }: {
   children: React.ReactNode;
   tone?: BadgeTone;
 }) {
   return (
-    <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${toneClass[tone]}`}>
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${tones[tone]}`}>
       {children}
     </span>
   );

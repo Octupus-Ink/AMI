@@ -1,39 +1,20 @@
-import { NextResponse } from "next/server";
-import { analysisRunStore } from "@/lib/demo/run-store";
-import { connectToDatabase } from "@/lib/db/mongoose";
-import { getAnalysisResultFromDatabase } from "@/lib/db/repositories";
+import { NextRequest, NextResponse } from "next/server";
+import { getAnalysisResult } from "@/lib/services/ami-store";
+import { jsonError, requireSession } from "@/lib/services/http";
 
-type RouteContext = {
-  params: Promise<{ id: string }> | { id: string };
-};
+export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { bundle, response } = await requireSession(request);
 
-export async function GET(_request: Request, context: RouteContext) {
+  if (!bundle) {
+    return response;
+  }
+
   const { id } = await context.params;
-  const db = await connectToDatabase();
+  const result = await getAnalysisResult(bundle.workspaceId, id);
 
-  if (db.available) {
-    try {
-      const stored = await getAnalysisResultFromDatabase(id);
-
-      if (stored) {
-        return NextResponse.json(stored);
-      }
-    } catch {
-      // Fall through to the in-memory demo store.
-    }
+  if (!result) {
+    return jsonError("Analysis run was not found", 404);
   }
 
-  const fallback = analysisRunStore.get(id);
-
-  if (fallback) {
-    return NextResponse.json(fallback);
-  }
-
-  return NextResponse.json(
-    {
-      error: "Analysis run not found",
-      id
-    },
-    { status: 404 }
-  );
+  return NextResponse.json(result);
 }

@@ -1,19 +1,13 @@
 import { NextResponse } from "next/server";
-import { getDatabaseStatus } from "@/lib/db/mongoose";
-import { getIntegrationStatus, getMissingEnvVars } from "@/lib/utils/env";
+import { hasMongoUri } from "@/lib/db/mongoose";
 
 export async function GET() {
-  const db = await getDatabaseStatus();
-  const integrations = getIntegrationStatus();
-  const missingEnvVars = getMissingEnvVars();
-
   return NextResponse.json({
     status: "ok",
-    app: "Autonomous Marketplace Intelligence System",
-    database: db,
-    integrations,
-    demoMode: missingEnvVars.length > 0 || !db.available,
-    missingEnvVars,
-    timestamp: new Date().toISOString()
+    stack: "Next.js App Router, TypeScript, Zod, Mongoose",
+    mongoConfigured: hasMongoUri(),
+    brightDataConfigured: Boolean(process.env.BRIGHT_DATA_API_KEY),
+    brightDataMode: process.env.BRIGHT_DATA_API_KEY ? "live_when_endpoints_are_configured" : "demo_fallback",
+    visibleAssistants: ["Competitor Assistant", "Inventory Assistant", "Trend Assistant"]
   });
 }
