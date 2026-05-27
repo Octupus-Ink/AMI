@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   CreditCard,
   Database,
+  Download,
   FileClock,
   LinkIcon,
   RefreshCw,
@@ -602,6 +603,30 @@ export function AccountWorkspaceClient() {
               )}
               {isUploadConnection(inventory.connectionType) && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-4 border-b border-slate-200 pb-4">
+                    <p className="text-sm font-semibold text-slate-950">Need a sample file?</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      Use these demo files to test AMI inventory context without connecting a real marketplace source.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      <a
+                        href="/demo/templates/inventory-template.csv"
+                        download
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
+                      >
+                        <Download size={16} />
+                        Download CSV template
+                      </a>
+                      <a
+                        href="/demo/templates/inventory-template.json"
+                        download
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
+                      >
+                        <Download size={16} />
+                        Download JSON example
+                      </a>
+                    </div>
+                  </div>
                   <label className="block">
                     <span className="text-xs font-semibold uppercase text-slate-500">
                       {inventory.connectionType === "csv_upload" ? "CSV upload" : "JSON upload"}
