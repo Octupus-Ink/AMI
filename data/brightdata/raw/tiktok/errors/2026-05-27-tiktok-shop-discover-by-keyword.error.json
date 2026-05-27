@@ -1,0 +1,38 @@
+[
+  {
+    "timestamp": "2026-05-27T07:14:34.908Z",
+    "input": {
+      "keyword": "portable blender",
+      "domain": "https://www.tiktok.com/shop"
+    },
+    "error": "Crawler error: Error: waiting for selector \".H3-Semibold, a[href*=\"/shop/pdp/\"], .product-title, h1[class*=\"title-\"], a[class*=\"category-item\"],[class*=\"DivProductListContainer\"], [class*=\"product-card-container\"]\" failed: timeout 30000ms exceeded",
+    "error_code": "crawl_error"
+  },
+  {
+    "timestamp": "2026-05-27T07:16:18.045Z",
+    "input": {
+      "keyword": "T shirt",
+      "domain": "https://www.tiktok.com/shop"
+    },
+    "error": "Crawler error: Error: waiting for selector \".H3-Semibold, a[href*=\"/shop/pdp/\"], .product-title, h1[class*=\"title-\"], a[class*=\"category-item\"],[class*=\"DivProductListContainer\"], [class*=\"product-card-container\"]\" failed: timeout 30000ms exceeded",
+    "error_code": "crawl_error"
+  },
+  {
+    "timestamp": "2026-05-27T07:17:29.199Z",
+    "input": {
+      "keyword": "smart plug",
+      "domain": "https://www.tiktok.com/shop"
+    },
+    "error": "Crawler error: Error: waiting for selector \".H3-Semibold, a[href*=\"/shop/pdp/\"], .product-title, h1[class*=\"title-\"], a[class*=\"category-item\"],[class*=\"DivProductListContainer\"], [class*=\"product-card-container\"]\" failed: timeout 30000ms exceeded",
+    "error_code": "crawl_error"
+  },
+  {
+    "timestamp": "2026-05-27T07:21:35.257Z",
+    "input": {
+      "keyword": "bluetooth headphones",
+      "domain": "https://www.tiktok.com/shop"
+    },
+    "error": "Crawler error: Error: waiting for selector \".H3-Semibold, a[href*=\"/shop/pdp/\"], .product-title, h1[class*=\"title-\"], a[class*=\"category-item\"],[class*=\"DivProductListContainer\"], [class*=\"product-card-container\"]\" failed: timeout 30000ms exceeded",
+    "error_code": "crawl_error"
+  }
+]

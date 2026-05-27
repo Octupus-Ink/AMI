@@ -1,0 +1,22 @@
+[
+  {
+    "timestamp": "2026-05-27T07:24:07.965Z",
+    "input": {
+      "url": "https://www.tiktok.com/@bbc",
+      "start_date": "",
+      "end_date": ""
+    },
+    "error": "Crawler error: Too much tag_request errors",
+    "error_code": "crawl_error"
+  },
+  {
+    "timestamp": "2026-05-27T07:27:28.114Z",
+    "input": {
+      "url": "https://www.tiktok.com/@portalotempo",
+      "start_date": "",
+      "end_date": ""
+    },
+    "error": "Crawler error: Too much tag_request errors",
+    "error_code": "crawl_error"
+  }
+]

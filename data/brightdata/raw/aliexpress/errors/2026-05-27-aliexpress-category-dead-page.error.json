@@ -1,0 +1,11 @@
+[
+  {
+    "timestamp": "2026-05-27T07:08:38.118Z",
+    "input": {
+      "url": "https://www.aliexpress.com/p/calp-plus/index.html?spm=a2g0o.home.tab.7.209f6278vBkgV8&osf=category_navigate_newTab2&queryFrom=kingKong&categoryTab=us_jewelry%2C_watches_%26_accessories&_gl=1*x9yse2*_gcl_au*MTM2NTQ4NTI1MC4xNzcwODg5NDY2*_ga*Njc4OTg2NjkyMDA1MDAzLjE3NzA4ODk0MjgyMjE.*_ga_VED1YSGNC7*czE3NzA4ODk0MTYkbzEkZzEkdDE3NzA4ODk0ODEkajYwJGwwJGgw",
+      "all_variations": true
+    },
+    "error": "There are no products for this input URL.",
+    "error_code": "dead_page"
+  }
+]

@@ -1,0 +1,13 @@
+[
+  {
+    "timestamp": "2026-05-27T06:25:35.104Z",
+    "input": {
+      "url": "https://www.amazon.com/dp/ASIN",
+      "zipcode": "94107",
+      "language": "EN",
+      "asin": ""
+    },
+    "error": "The navigation resulted in a dead page (404 status code)",
+    "error_code": "dead_page"
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "timestamp": "2026-05-27T06:58:58.654Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-usb-c-power-bank.html?SearchText=usb+c+power+bank"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:00.298Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-indoor-security-camera.html?SearchText=indoor+security+camera"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:18.594Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-smart-plug.html?SearchText=smart+plug"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:24.214Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-portable-blender.html?SearchText=portable+blender"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:24.955Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-nvme-ssd-2tb.html?SearchText=nvme+ssd+2tb"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:29.311Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-mechanical-keyboard.html?SearchText=mechanical+keyboard"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:42.972Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-gaming-laptop.html?SearchText=gaming+laptop"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T06:59:47.766Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-air-fryer.html?SearchText=air+fryer"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T07:00:08.955Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-wireless-gaming-mouse.html?SearchText=wireless+gaming+mouse"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  },
+  {
+    "timestamp": "2026-05-27T07:00:16.639Z",
+    "input": {
+      "url": "https://www.aliexpress.us/w/wholesale-bluetooth-headphones.html?SearchText=bluetooth+headphones"
+    },
+    "error": "Crawler error: waiting for selector \"h1[data-pl=\"product-title\"], .not-found--wrap--U9uRJog\" failed: timeout 60000ms exceeded",
+    "error_code": "wait_element_timeout"
+  }
+]
