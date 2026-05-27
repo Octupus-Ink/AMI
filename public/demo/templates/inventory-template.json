@@ -1,0 +1,41 @@
+﻿[
+  {
+    "sku": "AMZ-TMB-001",
+    "productName": "Insulated stainless steel tumbler",
+    "category": "Drinkware",
+    "quantity": 120,
+    "unitCost": 7.5,
+    "currentPrice": 24.99,
+    "currency": "USD",
+    "salesVelocity": "medium",
+    "lastSoldAt": "2026-05-20T18:30:00Z",
+    "margin": 0.42,
+    "status": "active"
+  },
+  {
+    "sku": "AMZ-ORG-002",
+    "productName": "Bamboo drawer organizer",
+    "category": "Home and kitchen",
+    "quantity": 45,
+    "unitCost": 5.2,
+    "currentPrice": 18.99,
+    "currency": "USD",
+    "salesVelocity": "low",
+    "lastSoldAt": "2026-05-18T14:10:00Z",
+    "margin": 0.38,
+    "status": "slow_moving"
+  },
+  {
+    "sku": "AMZ-LMP-003",
+    "productName": "Rechargeable desk lamp",
+    "category": "Home office",
+    "quantity": 18,
+    "unitCost": 11.4,
+    "currentPrice": 34.99,
+    "currency": "USD",
+    "salesVelocity": "high",
+    "lastSoldAt": "2026-05-25T09:05:00Z",
+    "margin": 0.51,
+    "status": "low_stock"
+  }
+]

@@ -12,3 +12,7 @@ pnpm-debug.log*
 .vercel
 coverage
 tsconfig.tsbuildinfo
+
+# Runtime uploads
+/storage/uploads/*
+!/storage/uploads/.gitkeep
