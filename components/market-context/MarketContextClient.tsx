@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Database, LinkIcon, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
-import { BusinessGoals, type MarketContextPayload } from "@/lib/schemas/ami";
+import { BusinessGoals, MarketContextPayloadSchema, type MarketContextPayload } from "@/lib/schemas/ami";
 
 const initialContext: MarketContextPayload = {
   productName: "Insulated stainless steel tumbler",
@@ -36,12 +36,28 @@ export function MarketContextClient() {
 
   useEffect(() => {
     async function loadWorkspace() {
+      const briefingError = window.localStorage.getItem("ami.briefingError");
+
+      if (briefingError) {
+        setMessage(briefingError);
+        window.localStorage.removeItem("ami.briefingError");
+      }
+
       const stored = window.localStorage.getItem("ami.briefingContext") ?? window.localStorage.getItem("ami.marketContext");
 
       if (stored) {
-        const parsed = JSON.parse(stored) as MarketContextPayload;
-        if (BusinessGoals.some((goal) => goal.id === parsed.businessGoal)) {
-          setForm({ ...initialContext, ...parsed });
+        try {
+          const parsed = MarketContextPayloadSchema.safeParse(JSON.parse(stored));
+
+          if (parsed.success && BusinessGoals.some((goal) => goal.id === parsed.data.businessGoal)) {
+            setForm({ ...initialContext, ...parsed.data });
+          } else {
+            window.localStorage.removeItem("ami.briefingContext");
+            window.localStorage.removeItem("ami.marketContext");
+          }
+        } catch {
+          window.localStorage.removeItem("ami.briefingContext");
+          window.localStorage.removeItem("ami.marketContext");
         }
       }
 
@@ -71,10 +87,18 @@ export function MarketContextClient() {
     event.preventDefault();
     setBusy(true);
     setMessage("");
-    const payload = {
+    const parsed = MarketContextPayloadSchema.safeParse({
       ...form,
       useInventoryContext: inventoryConnected
-    };
+    });
+
+    if (!parsed.success) {
+      setBusy(false);
+      setMessage("AMI briefing context is invalid. Review the required fields and start again.");
+      return;
+    }
+
+    const payload = parsed.data;
     const response = await fetch("/api/market-context", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

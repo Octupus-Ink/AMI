@@ -6,6 +6,7 @@ import { ArrowLeft, CheckCircle2, CircleDashed, DatabaseZap, Radar, ShieldAlert 
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { StatusDot } from "@/components/ui/StatusDot";
 import {
+  MarketContextPayloadSchema,
   VisibleAssistants,
   type AnalysisResult,
   type AssistantId,
@@ -79,9 +80,25 @@ function dotTone(state: AssistantState): "teal" | "amber" | "red" | "green" | "s
   return "slate";
 }
 
+function failedStartStates(message: string): Record<AssistantId, AssistantState> {
+  const inventoryIssue = message.toLowerCase().includes("inventory");
+
+  return {
+    trend: inventoryIssue ? "skipped" : "failed",
+    competitor: inventoryIssue ? "skipped" : "failed",
+    supplier: inventoryIssue ? "skipped" : "failed",
+    inventory: inventoryIssue ? "warning" : "failed"
+  };
+}
+
+function logProcessing(message: string, details?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== "production") {
+    console.info(`[AMI Processing] ${message}`, details ?? "");
+  }
+}
+
 export function ProcessingClient() {
   const router = useRouter();
-  const started = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState(12);
   const [assistantStates, setAssistantStates] = useState(initialStates);
@@ -91,42 +108,89 @@ export function ProcessingClient() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    if (started.current) {
-      return;
-    }
+    let isActive = true;
+    const controller = new AbortController();
+    const timers: number[] = [];
+    abortRef.current = controller;
 
-    started.current = true;
     const stored = window.localStorage.getItem("ami.marketContext");
 
     if (!stored) {
+      window.localStorage.setItem("ami.briefingError", "AMI briefing context was missing. Review the briefing and start again.");
       router.push("/market-context-setup");
-      return;
+      return () => {
+        isActive = false;
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        controller.abort();
+      };
     }
 
-    const context = JSON.parse(stored) as MarketContextPayload;
-    const inventoryCanBeLimited = !context.useInventoryContext && context.businessGoal === "discover_new_products";
-    const controller = new AbortController();
-    abortRef.current = controller;
+    let context: MarketContextPayload;
 
-    const timers = [
+    try {
+      const parsedContext = MarketContextPayloadSchema.safeParse(JSON.parse(stored));
+
+      if (!parsedContext.success) {
+        throw new Error("Invalid market context");
+      }
+
+      context = parsedContext.data;
+    } catch {
+      window.localStorage.removeItem("ami.marketContext");
+      window.localStorage.setItem("ami.briefingError", "AMI briefing context was invalid. Review the briefing and start again.");
+      router.push("/market-context-setup");
+      return () => {
+        isActive = false;
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        controller.abort();
+      };
+    }
+
+    logProcessing("context loaded", {
+      businessGoal: context.businessGoal,
+      useInventoryContext: context.useInventoryContext
+    });
+    const inventoryCanBeLimited = !context.useInventoryContext && context.businessGoal === "discover_new_products";
+
+    timers.push(
       window.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+
         setProgress(24);
         setAssistantStates((current) => ({ ...current, trend: "running" }));
         setActivity((current) => ({ ...current, trend: "Reading demand direction, seasonality, and trend velocity." }));
       }, 250),
       window.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+
         setProgress(42);
         setAssistantStates((current) => ({ ...current, trend: "completed", competitor: "running" }));
         setActivity((current) => ({ ...current, competitor: "Comparing competitor prices, discounts, and availability." }));
         setSourceStatus(processingMessages[1]);
       }, 850),
       window.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+
         setProgress(61);
         setAssistantStates((current) => ({ ...current, competitor: "completed", supplier: "running" }));
         setActivity((current) => ({ ...current, supplier: "Estimating unit cost, delivery windows, and sourcing risk." }));
         setSourceStatus(processingMessages[2]);
       }, 1400),
       window.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+
         setProgress(78);
         setAssistantStates((current) => ({
           ...current,
@@ -142,13 +206,18 @@ export function ProcessingClient() {
         setSourceStatus(processingMessages[3]);
       }, 1950),
       window.setTimeout(() => {
+        if (!isActive) {
+          return;
+        }
+
         setProgress(90);
         setSourceStatus(processingMessages[4]);
       }, 2400)
-    ];
+    );
 
     async function startAnalysis() {
       try {
+        logProcessing("starting analysis");
         const response = await fetch("/api/analysis/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -156,17 +225,45 @@ export function ProcessingClient() {
           signal: controller.signal
         });
 
+        if (!isActive) {
+          return;
+        }
+
+        logProcessing("analysis response status", { status: response.status, ok: response.ok });
+
         if (!response.ok) {
           const payload = await response.json().catch(() => ({ error: "" }));
+          const errorMessage = payload.error || "AMI could not complete this analysis. Return to Briefing and validate the context.";
+
+          if (!isActive) {
+            return;
+          }
+
+          timers.forEach((timer) => window.clearTimeout(timer));
+          timers.length = 0;
           setProgress(100);
-          setAssistantStates((current) => ({ ...current, inventory: "failed" }));
+          setAssistantStates(failedStartStates(errorMessage));
+          setActivity((current) => ({
+            ...current,
+            inventory: errorMessage.toLowerCase().includes("inventory")
+              ? "Inventory is required for this business goal before AMI can continue."
+              : "AMI stopped before inventory context could be resolved."
+          }));
           setSourceStatus("Analysis stopped");
-          setMessage(payload.error || "AMI could not complete this analysis. Return to Briefing and validate the context.");
+          setMessage(errorMessage);
+          logProcessing("analysis failed", { status: response.status, reason: errorMessage });
           return;
         }
 
         const result = (await response.json()) as AnalysisResult;
+
+        if (!isActive) {
+          return;
+        }
+
         const inventoryState = assistantStateFromResult(result.assistantStatus?.inventory);
+        timers.forEach((timer) => window.clearTimeout(timer));
+        timers.length = 0;
         setAssistantStates({
           trend: assistantStateFromResult(result.assistantStatus?.trend),
           competitor: assistantStateFromResult(result.assistantStatus?.competitor),
@@ -189,20 +286,39 @@ export function ProcessingClient() {
           setMessage(result.warnings[0]);
         }
         window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
-        window.setTimeout(() => router.push(`/recommendations?runId=${result.analysisRunId}`), 650);
+        timers.push(
+          window.setTimeout(() => {
+            if (isActive) {
+              router.push(`/recommendations?runId=${result.analysisRunId}`);
+            }
+          }, 650)
+        );
       } catch (error) {
-        if (controller.signal.aborted) {
+        const isAbortError = error instanceof DOMException && error.name === "AbortError";
+
+        if (!isActive || (controller.signal.aborted && isAbortError)) {
           return;
         }
 
-        setMessage(error instanceof Error ? error.message : "AMI could not complete this analysis.");
+        const errorMessage = error instanceof Error ? error.message : "AMI could not complete this analysis.";
+        timers.forEach((timer) => window.clearTimeout(timer));
+        timers.length = 0;
+        setProgress(100);
+        setAssistantStates(failedStartStates(errorMessage));
+        setSourceStatus("Analysis failed");
+        setMessage(errorMessage);
+        logProcessing("analysis failed", { reason: errorMessage });
       }
     }
 
     startAnalysis();
 
     return () => {
+      isActive = false;
       timers.forEach((timer) => window.clearTimeout(timer));
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
       controller.abort();
     };
   }, [router]);
