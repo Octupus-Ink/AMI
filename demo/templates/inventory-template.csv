@@ -1,0 +1,4 @@
+﻿sku,productName,category,quantity,unitCost,currentPrice,currency,salesVelocity,lastSoldAt,margin,status
+AMZ-TMB-001,Insulated stainless steel tumbler,Drinkware,120,7.50,24.99,USD,medium,2026-05-20T18:30:00Z,0.42,active
+AMZ-ORG-002,Bamboo drawer organizer,Home and kitchen,45,5.20,18.99,USD,low,2026-05-18T14:10:00Z,0.38,slow_moving
+AMZ-LMP-003,Rechargeable desk lamp,Home office,18,11.40,34.99,USD,high,2026-05-25T09:05:00Z,0.51,low_stock
