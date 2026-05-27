@@ -29,6 +29,26 @@ function goalLabel(goalId: string) {
   return BusinessGoals.find((goal) => goal.id === goalId)?.label ?? goalId;
 }
 
+function assistantTone(status: string | undefined): "neutral" | "green" | "amber" | "red" | "blue" {
+  if (status === "completed") {
+    return "green";
+  }
+
+  if (status === "warning" || status === "skipped") {
+    return "amber";
+  }
+
+  if (status === "failed") {
+    return "red";
+  }
+
+  if (status === "running") {
+    return "blue";
+  }
+
+  return "neutral";
+}
+
 function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
   const evidence = analysis.evidencePackages[0];
 
@@ -161,6 +181,15 @@ export function RecommendationsClient() {
         </div>
       </section>
 
+      {analysis.warnings?.length > 0 && (
+        <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-1 text-amber-800" size={20} />
+            <p className="text-sm leading-6 text-amber-950">{analysis.warnings[0]}</p>
+          </div>
+        </section>
+      )}
+
       <section className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-start gap-3">
@@ -268,9 +297,14 @@ export function RecommendationsClient() {
               <div key={contribution.assistantId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <p className="font-semibold text-slate-950">{assistant?.name}</p>
-                  <Badge tone={contribution.risk === "high" ? "red" : contribution.risk === "medium" ? "amber" : "green"}>
-                    {contribution.confidence}
-                  </Badge>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Badge tone={assistantTone(analysis.assistantStatus?.[contribution.assistantId])}>
+                      {formatMode(analysis.assistantStatus?.[contribution.assistantId] ?? "completed")}
+                    </Badge>
+                    <Badge tone={contribution.risk === "high" ? "red" : contribution.risk === "medium" ? "amber" : "green"}>
+                      {contribution.confidence}
+                    </Badge>
+                  </div>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-600">{contribution.summary}</p>
                 <p className="mt-2 text-sm font-semibold text-slate-800">{contribution.latestContribution}</p>

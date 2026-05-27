@@ -79,7 +79,7 @@ export function StartAccessClient() {
     setBusy(false);
 
     if (!response.ok) {
-      setMessage("Login was not accepted. Confirm the workspace ID and password.");
+      setMessage("Login was not accepted. Confirm the email, workspace ID, or password.");
       return;
     }
 
@@ -154,7 +154,7 @@ export function StartAccessClient() {
                 </p>
               </div>
               <Field
-                label="Workspace ID"
+                label="Email or workspace ID"
                 value={login.workspaceId}
                 onChange={(value) => setLogin((current) => ({ ...current, workspaceId: value }))}
               />

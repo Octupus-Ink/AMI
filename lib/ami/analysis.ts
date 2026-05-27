@@ -17,6 +17,16 @@ import {
   RecommendationSchema
 } from "@/lib/schemas/ami";
 
+export const INVENTORY_CONTEXT_UNAVAILABLE_WARNING =
+  "Inventory context was requested, but no usable inventory source is connected. AMI continued using trend, competitor, and supplier signals.";
+
+type InventoryRunContext = {
+  requested: boolean;
+  available: boolean;
+  warningMessage?: string;
+  sourceLabel?: string;
+};
+
 function riskFromGoal(goal: MarketContextPayload["businessGoal"]) {
   if (goal === "stock_optimization") {
     return "medium" as const;
@@ -39,11 +49,13 @@ function actionFromGoal(context: MarketContextPayload) {
   return actions[context.businessGoal];
 }
 
-function assistantContributions(mode: SourceMode, product: string): AssistantContribution[] {
+function assistantContributions(mode: SourceMode, product: string, inventoryContext: InventoryRunContext): AssistantContribution[] {
   const sourceLabel =
     mode === "live"
       ? "Bright Data live web intelligence"
       : "Bright Data-shaped demo fallback source snapshots";
+  const usesInventory = inventoryContext.requested && inventoryContext.available;
+  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
 
   return [
     {
@@ -78,13 +90,23 @@ function assistantContributions(mode: SourceMode, product: string): AssistantCon
     },
     {
       assistantId: "inventory",
-      summary: "Reviewed stock posture and supplier margin context without exposing raw inventory records.",
-      latestContribution: "Flagged enough margin headroom to justify a controlled sourcing review.",
-      signalStrength: "strong",
+      summary: inventoryUnavailable
+        ? "Inventory context was requested, but no usable source is connected."
+        : usesInventory
+          ? "Reviewed stock posture and supplier margin context without exposing raw inventory records."
+          : "Inventory Assistant was skipped because this goal can run without inventory context.",
+      latestContribution: inventoryUnavailable
+        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
+        : usesInventory
+          ? "Flagged enough margin headroom to justify a controlled sourcing review."
+          : "AMI used trend, competitor, and supplier signals without inventory context.",
+      signalStrength: usesInventory ? "strong" : "moderate",
       confidence: "medium",
       risk: "medium",
-      dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
-      usageCost: 0.7
+      dataSourcesUsed: usesInventory
+        ? [inventoryContext.sourceLabel ?? "Workspace inventory context", "Supplier margin snapshot"]
+        : ["Inventory Assistant skipped", "Trend, competitor, and supplier signals"],
+      usageCost: usesInventory ? 0.7 : 0
     }
   ];
 }
@@ -92,10 +114,13 @@ function assistantContributions(mode: SourceMode, product: string): AssistantCon
 function assistantFindings(
   context: MarketContextPayload,
   mode: SourceMode,
-  sourceLabel: string
+  sourceLabel: string,
+  inventoryContext: InventoryRunContext
 ): AssistantFinding[] {
   const dataFreshness =
     mode === "live" ? "Collected during this analysis run" : "Seeded demo snapshot refreshed for the MVP walkthrough";
+  const usesInventory = inventoryContext.requested && inventoryContext.available;
+  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
 
   return [
     {
@@ -133,16 +158,22 @@ function assistantFindings(
     },
     {
       assistantId: "inventory",
-      finding: "Inventory context supports a controlled action, not a broad purchasing move.",
-      reason: context.useInventoryContext
-        ? "AMI used connected inventory context to keep the recommendation scoped to current operating posture."
-        : "AMI used supplier and margin context because no connected inventory source was selected.",
-      signal: "strong",
+      finding: inventoryUnavailable
+        ? "Inventory Assistant continued as a warning state."
+        : usesInventory
+          ? "Inventory context supports a controlled action, not a broad purchasing move."
+          : "Inventory Assistant was skipped for this optional inventory goal.",
+      reason: inventoryUnavailable
+        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
+        : usesInventory
+          ? "AMI used connected inventory context to keep the recommendation scoped to current operating posture."
+          : "AMI used supplier and margin context because no connected inventory source was selected.",
+      signal: usesInventory ? "strong" : "moderate",
       confidence: "medium",
       risk: "medium",
       sourceType: "Workspace inventory context",
-      sourceLabel: context.useInventoryContext ? "Connected inventory context" : "No inventory context selected",
-      dataFreshness: context.useInventoryContext
+      sourceLabel: usesInventory ? inventoryContext.sourceLabel ?? "Connected inventory context" : "No inventory context selected",
+      dataFreshness: usesInventory
         ? "Last inventory analysis timestamp is available in Account / Workspace"
         : "No inventory sync was used for this run"
     }
@@ -208,11 +239,12 @@ function buildRecommendation(
   analysisRunId: string,
   context: MarketContextPayload,
   evidencePackage: EvidencePackage,
-  mode: SourceMode
+  mode: SourceMode,
+  inventoryContext: InventoryRunContext
 ): Recommendation {
   const riskLevel = riskFromGoal(context.businessGoal);
-  const contributions = assistantContributions(mode, context.productName);
-  const opportunityScore = context.useInventoryContext ? 84 : 78;
+  const contributions = assistantContributions(mode, context.productName, inventoryContext);
+  const opportunityScore = inventoryContext.requested && inventoryContext.available ? 84 : 78;
 
   return RecommendationSchema.parse({
     recommendationId: randomUUID(),
@@ -241,7 +273,11 @@ function buildRecommendation(
   });
 }
 
-export async function runAmiAnalysis(workspaceId: string, context: MarketContextPayload): Promise<AnalysisResult> {
+export async function runAmiAnalysis(
+  workspaceId: string,
+  context: MarketContextPayload,
+  inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext }
+): Promise<AnalysisResult> {
   const analysisRunId = randomUUID();
   const startedAt = new Date().toISOString();
   const [serpResult, scrapeResult] = await Promise.all([
@@ -252,8 +288,8 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
   const completedAt = new Date().toISOString();
   const evidencePackage = buildEvidencePackage(context, mode, scrapeResult.product, completedAt);
   const supplierOptions = buildSupplierOptions();
-  const executiveRecommendation = buildRecommendation(workspaceId, analysisRunId, context, evidencePackage, mode);
-  const findings = assistantFindings(context, mode, scrapeResult.message);
+  const executiveRecommendation = buildRecommendation(workspaceId, analysisRunId, context, evidencePackage, mode, inventoryContext);
+  const findings = assistantFindings(context, mode, scrapeResult.message, inventoryContext);
   const secondaryOpportunity = RecommendationSchema.parse({
     ...executiveRecommendation,
     recommendationId: randomUUID(),
@@ -276,7 +312,12 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
       trend: "completed",
       competitor: "completed",
       supplier: "completed",
-      inventory: "completed",
+      inventory:
+        inventoryContext.requested && inventoryContext.available
+          ? "completed"
+          : inventoryContext.warningMessage
+            ? "warning"
+            : "skipped",
     },
     sourceCollectionStatus: {
       brightDataProduct: mode === "live" ? scrapeResult.product : "Web Scraper API / SERP API",
@@ -292,6 +333,7 @@ export async function runAmiAnalysis(workspaceId: string, context: MarketContext
     assistantFindings: findings,
     evidencePackages: [evidencePackage],
     supplierOptions,
+    warnings: inventoryContext.warningMessage ? [inventoryContext.warningMessage] : [],
     demoMode: mode === "demo_fallback"
   });
 

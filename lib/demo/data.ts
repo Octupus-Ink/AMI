@@ -93,7 +93,11 @@ export const demoCredits = {
 export const demoInventoryStatus = {
   workspaceId: demoWorkspace.id,
   connected: true,
-  latestConnectionLabel: "Demo snapshot - Amazon inventory context",
+  marketplaceName: "Amazon",
+  marketplaceUrl: "",
+  connectionType: "demo_snapshot",
+  credentialType: "demo_snapshot",
+  latestConnectionLabel: "Amazon - demo_snapshot",
   lastSyncAt: "2026-05-26T20:45:44.000Z",
   lastAnalysisAt: "2026-05-26T20:45:44.000Z",
   status: "demo_snapshot"

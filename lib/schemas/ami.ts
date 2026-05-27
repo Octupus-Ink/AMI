@@ -4,9 +4,17 @@ export const AssistantIdSchema = z.enum(["trend", "competitor", "supplier", "inv
 export const RiskLevelSchema = z.enum(["low", "medium", "high"]);
 export const ConfidenceLevelSchema = z.enum(["low", "medium", "high"]);
 export const SignalStrengthSchema = z.enum(["weak", "moderate", "strong"]);
-export const AnalysisStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
+export const AnalysisStatusSchema = z.enum(["pending", "running", "completed", "failed", "warning", "skipped"]);
 export const SourceModeSchema = z.enum(["live", "demo_fallback", "demo_snapshot", "not_configured", "error"]);
 export const BusinessGoalSchema = z.enum(["discover_new_products", "stock_optimization", "revenue_stock_opportunities"]);
+export const InventorySourceStatusSchema = z.enum([
+  "not_connected",
+  "connected",
+  "demo_snapshot",
+  "warning",
+  "syncing",
+  "error"
+]);
 
 export const VisibleAssistants = [
   {
@@ -188,6 +196,7 @@ export const AnalysisResultSchema = z.object({
   assistantFindings: z.array(AssistantFindingSchema),
   evidencePackages: z.array(EvidencePackageSchema).min(1),
   supplierOptions: z.array(SupplierOptionSchema).default([]),
+  warnings: z.array(z.string()).default([]),
   demoMode: z.boolean()
 });
 
@@ -219,10 +228,14 @@ export const InventoryConnectionTypeSchema = z.enum([
 
 export const InventoryConnectionPayloadSchema = z.object({
   marketplaceName: z.string().trim().min(2).max(120),
-  marketplaceUrl: z.string().trim().url(),
+  marketplaceUrl: z.string().trim().max(500).optional().default(""),
   connectionType: InventoryConnectionTypeSchema,
-  credentialType: z.string().trim().min(2).max(80),
-  credential: z.string().max(4000).optional().default("")
+  credentialType: InventoryConnectionTypeSchema.optional(),
+  credential: z.string().max(4000).optional().default(""),
+  uploadedFileName: z.string().trim().max(255).optional(),
+  uploadedFileType: z.enum(["csv", "json"]).optional(),
+  uploadedFileSize: z.number().int().nonnegative().max(2_000_000).optional(),
+  uploadedFileContent: z.string().max(1_000_000).optional()
 });
 
 export const DemoPaymentPayloadSchema = z.object({
@@ -239,6 +252,8 @@ export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export type ConfidenceLevel = z.infer<typeof ConfidenceLevelSchema>;
 export type SignalStrength = z.infer<typeof SignalStrengthSchema>;
 export type SourceMode = z.infer<typeof SourceModeSchema>;
+export type InventoryConnectionType = z.infer<typeof InventoryConnectionTypeSchema>;
+export type InventorySourceStatus = z.infer<typeof InventorySourceStatusSchema>;
 export type RegisterPayload = z.infer<typeof RegisterPayloadSchema>;
 export type LoginPayload = z.infer<typeof LoginPayloadSchema>;
 export type MarketContextPayload = z.infer<typeof MarketContextPayloadSchema>;

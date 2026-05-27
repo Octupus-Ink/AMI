@@ -14,7 +14,9 @@ import {
   type AssistantId,
   type AssistantUsage,
   type DemoPaymentPayload,
+  type InventoryConnectionType,
   type InventoryConnectionPayload,
+  type InventorySourceStatus,
   type MarketContextPayload,
   type Recommendation,
   type RegisterPayload,
@@ -76,17 +78,39 @@ type InventoryConnectionRecord = {
   id: string;
   workspaceId: string;
   marketplaceName: string;
-  marketplaceUrl: string;
-  connectionType: InventoryConnectionPayload["connectionType"];
-  credentialType: string;
+  marketplaceUrl?: string;
+  connectionType: InventoryConnectionType;
+  credentialType: InventoryConnectionType;
   encryptedCredential: string;
   credentialFingerprint: string;
   maskedCredential: string;
   syncMode: "demo" | "connected";
-  status: "connected" | "demo_snapshot";
+  status: Extract<InventorySourceStatus, "connected" | "demo_snapshot">;
   lastSyncAt: string;
   lastAnalysisAt: string;
+  uploadedFileName?: string;
+  uploadedFileType?: "csv" | "json";
+  uploadedFileSize?: number;
+  uploadedFileContent?: string;
   createdAt: string;
+};
+
+export type InventorySourceState = {
+  workspaceId: string;
+  connected: boolean;
+  marketplaceName?: string;
+  marketplaceUrl?: string;
+  connectionType?: InventoryConnectionType;
+  credentialType?: InventoryConnectionType;
+  latestConnectionLabel: string;
+  lastSyncAt: string | null;
+  lastAnalysisAt: string | null;
+  uploadedFileName?: string;
+  uploadedFileType?: "csv" | "json";
+  uploadedFileSize?: number;
+  status: InventorySourceStatus;
+  warningMessage?: string;
+  errorMessage?: string;
 };
 
 type CreditRecord = {
@@ -123,7 +147,7 @@ function initialStore(): AmiStore {
     users: [
       {
         ...demoUser,
-        passwordHash: "$2a$12$demo.password.hash.placeholder"
+        passwordHash: "$2a$12$/6bkM80goeEHKMe8wbYMXery4f70VHJzwezxAC6kZWtHDMprHEZe6"
       }
     ],
     sessions: [],
@@ -166,6 +190,126 @@ async function databaseReady() {
   } catch {
     return false;
   }
+}
+
+const INVENTORY_CONNECTION_TYPES: readonly InventoryConnectionType[] = [
+  "marketplace_url",
+  "api_key",
+  "bearer_token",
+  "csv_upload",
+  "json_upload",
+  "demo_snapshot"
+];
+
+const INVENTORY_SOURCE_STATUSES: readonly InventorySourceStatus[] = [
+  "not_connected",
+  "connected",
+  "demo_snapshot",
+  "warning",
+  "syncing",
+  "error"
+];
+
+const NO_INVENTORY_SOURCE_MESSAGE = "No inventory source is connected. Connect a source before re-syncing.";
+
+function isInventoryConnectionType(value: unknown): value is InventoryConnectionType {
+  return typeof value === "string" && INVENTORY_CONNECTION_TYPES.includes(value as InventoryConnectionType);
+}
+
+function isInventorySourceStatus(value: unknown): value is InventorySourceStatus {
+  return typeof value === "string" && INVENTORY_SOURCE_STATUSES.includes(value as InventorySourceStatus);
+}
+
+function readOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readOptionalFileType(value: unknown): "csv" | "json" | undefined {
+  return value === "csv" || value === "json" ? value : undefined;
+}
+
+function readOptionalNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function sourceLabel(marketplaceName: string | undefined, connectionType: InventoryConnectionType | undefined) {
+  return marketplaceName && connectionType ? `${marketplaceName} - ${connectionType}` : "No inventory source connected";
+}
+
+function disconnectedInventoryStatus(workspaceId: string): InventorySourceState {
+  return {
+    workspaceId,
+    connected: false,
+    latestConnectionLabel: "No inventory source connected",
+    lastSyncAt: null,
+    lastAnalysisAt: null,
+    status: "not_connected"
+  };
+}
+
+function normalizeInventoryStatus(workspaceId: string, raw?: Record<string, unknown> | null): InventorySourceState {
+  if (!raw) {
+    return disconnectedInventoryStatus(workspaceId);
+  }
+
+  const status = isInventorySourceStatus(raw.status)
+    ? raw.status
+    : raw.connected
+      ? "connected"
+      : "not_connected";
+  const connectionType = isInventoryConnectionType(raw.connectionType)
+    ? raw.connectionType
+    : status === "demo_snapshot"
+      ? "demo_snapshot"
+      : status === "connected"
+        ? "marketplace_url"
+        : undefined;
+  const marketplaceName = readOptionalString(raw.marketplaceName) ?? (connectionType === "demo_snapshot" ? "Amazon" : undefined);
+  const connected = Boolean(raw.connected) && (status === "connected" || status === "demo_snapshot");
+
+  if (!connected && status !== "warning" && status !== "error" && status !== "syncing") {
+    return disconnectedInventoryStatus(workspaceId);
+  }
+
+  return {
+    workspaceId,
+    connected,
+    marketplaceName,
+    marketplaceUrl: readOptionalString(raw.marketplaceUrl),
+    connectionType,
+    credentialType: isInventoryConnectionType(raw.credentialType) ? raw.credentialType : connectionType,
+    latestConnectionLabel: connected ? sourceLabel(marketplaceName, connectionType) : "No inventory source connected",
+    lastSyncAt: readOptionalString(raw.lastSyncAt) ?? null,
+    lastAnalysisAt: readOptionalString(raw.lastAnalysisAt) ?? null,
+    uploadedFileName: readOptionalString(raw.uploadedFileName),
+    uploadedFileType: readOptionalFileType(raw.uploadedFileType),
+    uploadedFileSize: readOptionalNumber(raw.uploadedFileSize),
+    status,
+    warningMessage: readOptionalString(raw.warningMessage),
+    errorMessage: readOptionalString(raw.errorMessage)
+  };
+}
+
+function inventoryStatusFromRecord(record: InventoryConnectionRecord): InventorySourceState {
+  return {
+    workspaceId: record.workspaceId,
+    connected: true,
+    marketplaceName: record.marketplaceName,
+    marketplaceUrl: record.marketplaceUrl,
+    connectionType: record.connectionType,
+    credentialType: record.credentialType,
+    latestConnectionLabel: sourceLabel(record.marketplaceName, record.connectionType),
+    lastSyncAt: record.lastSyncAt,
+    lastAnalysisAt: record.lastAnalysisAt,
+    uploadedFileName: record.uploadedFileName,
+    uploadedFileType: record.uploadedFileType,
+    uploadedFileSize: record.uploadedFileSize,
+    status: record.status
+  };
+}
+
+export function isUsableInventorySource(status: InventorySourceState) {
+  return status.connected && (status.status === "connected" || status.status === "demo_snapshot") && Boolean(status.connectionType);
 }
 
 function calculateAlertState(creditsUsed: number, creditLimit: number): AssistantUsage["alertState"] {
@@ -342,6 +486,15 @@ export async function createSession(userId: string, workspaceId: string) {
 export async function login(email: string, password: string) {
   const identifier = email.trim();
   const normalizedEmail = identifier.toLowerCase();
+  const isDemoLogin =
+    normalizedEmail === demoUser.email ||
+    identifier === demoWorkspace.id ||
+    identifier === demoWorkspace.workspaceName;
+
+  if (isDemoLogin && password === "demo-workspace-password") {
+    const demo = await createDemoSession();
+    return demo.session;
+  }
 
   if (await databaseReady()) {
     let user = (await User.findOne({ email: normalizedEmail }).lean()) as
@@ -399,6 +552,7 @@ export async function login(email: string, password: string) {
 
 export async function createDemoSession() {
   if (await databaseReady()) {
+    const demoPasswordHash = await hashPassword("demo-workspace-password");
     let user = (await User.findOne({ email: demoUser.email }).lean()) as
       | { _id: unknown; name: string; email: string }
       | null;
@@ -407,13 +561,15 @@ export async function createDemoSession() {
       const createdUser = await User.create({
         name: demoUser.name,
         email: demoUser.email,
-        passwordHash: await hashPassword("demo-workspace-password")
+        passwordHash: demoPasswordHash
       });
       user = {
         _id: createdUser._id,
         name: createdUser.name,
         email: createdUser.email
       };
+    } else {
+      await User.findByIdAndUpdate(user._id, { passwordHash: demoPasswordHash });
     }
 
     const userId = String(user._id);
@@ -840,14 +996,7 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
         lastCredentialCheck: new Date().toISOString()
       },
       credits: credits?.data,
-      inventoryStatus: inventoryStatus?.data ?? {
-        workspaceId,
-        connected: false,
-        latestConnectionLabel: "No inventory source connected",
-        lastSyncAt: null,
-        lastAnalysisAt: null,
-        status: "not_connected"
-      },
+      inventoryStatus: normalizeInventoryStatus(workspaceId, inventoryStatus?.data),
       savedReports: savedReports.map((report) => report.data),
       approvedRecommendations: approvedRecommendations.map((recommendation) => recommendation.data)
     };
@@ -864,16 +1013,10 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
       lastCredentialCheck: new Date().toISOString()
     },
     credits: store.workspaceCredits.find((credits) => credits.workspaceId === workspaceId),
-    inventoryStatus:
-      store.inventorySyncStatus.find((status) => status.workspaceId === workspaceId) ??
-      {
-        workspaceId,
-        connected: false,
-        latestConnectionLabel: "No inventory source connected",
-        lastSyncAt: null,
-        lastAnalysisAt: null,
-        status: "not_connected"
-      },
+    inventoryStatus: normalizeInventoryStatus(
+      workspaceId,
+      store.inventorySyncStatus.find((status) => status.workspaceId === workspaceId)
+    ),
     savedReports: store.savedReports,
     approvedRecommendations: store.approvedRecommendations
   };
@@ -881,35 +1024,34 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
 
 export async function connectInventorySource(workspaceId: string, payload: InventoryConnectionPayload) {
   const now = new Date().toISOString();
-  const encrypted = encryptCredential(payload.credential || `${payload.connectionType}:demo`);
+  const storesCredential = payload.connectionType === "api_key" || payload.connectionType === "bearer_token";
+  const encrypted = storesCredential ? encryptCredential(payload.credential) : null;
   const syncMode = payload.connectionType === "demo_snapshot" ? "demo" : "connected";
   const record: InventoryConnectionRecord = {
     id: randomUUID(),
     workspaceId,
     marketplaceName: payload.marketplaceName,
-    marketplaceUrl: payload.marketplaceUrl,
+    marketplaceUrl: payload.marketplaceUrl || "",
     connectionType: payload.connectionType,
-    credentialType: payload.credentialType,
-    encryptedCredential: encrypted.encryptedCredential,
-    credentialFingerprint: encrypted.credentialFingerprint,
-    maskedCredential: encrypted.maskedCredential,
+    credentialType: payload.connectionType,
+    encryptedCredential: encrypted?.encryptedCredential ?? "",
+    credentialFingerprint: encrypted?.credentialFingerprint ?? "",
+    maskedCredential: encrypted?.maskedCredential ?? "",
     syncMode,
     status: payload.connectionType === "demo_snapshot" ? "demo_snapshot" : "connected",
     lastSyncAt: now,
     lastAnalysisAt: now,
+    uploadedFileName: payload.uploadedFileName,
+    uploadedFileType: payload.uploadedFileType,
+    uploadedFileSize: payload.uploadedFileSize,
+    uploadedFileContent: payload.uploadedFileContent,
     createdAt: now
   };
-  const status = {
-    workspaceId,
-    connected: true,
-    latestConnectionLabel: `${payload.marketplaceName} - ${payload.connectionType}`,
-    lastSyncAt: now,
-    lastAnalysisAt: now,
-    status: record.status
-  };
+  const status = inventoryStatusFromRecord(record);
 
   if (await databaseReady()) {
     await Promise.all([
+      InventoryConnection.deleteMany({ workspaceId }),
       InventoryConnection.create({
         workspaceId,
         data: record
@@ -918,11 +1060,12 @@ export async function connectInventorySource(workspaceId: string, payload: Inven
       createAuditEvent(workspaceId, "inventory_connection_created", {
         marketplaceName: payload.marketplaceName,
         connectionType: payload.connectionType,
-        credentialFingerprint: encrypted.credentialFingerprint
+        credentialFingerprint: encrypted?.credentialFingerprint
       })
     ]);
   } else {
     const store = getDemoStore();
+    store.inventoryConnections = store.inventoryConnections.filter((entry) => entry.workspaceId !== workspaceId);
     store.inventoryConnections.push(record);
     store.inventorySyncStatus = store.inventorySyncStatus.filter((entry) => entry.workspaceId !== workspaceId);
     store.inventorySyncStatus.push(status);
@@ -933,7 +1076,7 @@ export async function connectInventorySource(workspaceId: string, payload: Inven
       metadata: {
         marketplaceName: payload.marketplaceName,
         connectionType: payload.connectionType,
-        credentialFingerprint: encrypted.credentialFingerprint
+        credentialFingerprint: encrypted?.credentialFingerprint
       },
       createdAt: now
     });
@@ -950,8 +1093,124 @@ export async function connectInventorySource(workspaceId: string, payload: Inven
     syncMode: record.syncMode,
     status: record.status,
     lastSyncAt: record.lastSyncAt,
-    lastAnalysisAt: record.lastAnalysisAt
+    lastAnalysisAt: record.lastAnalysisAt,
+    uploadedFileName: record.uploadedFileName,
+    uploadedFileType: record.uploadedFileType,
+    uploadedFileSize: record.uploadedFileSize,
+    inventoryStatus: status
   };
+}
+
+async function saveInventoryStatus(workspaceId: string, status: InventorySourceState) {
+  if (await databaseReady()) {
+    await InventorySyncStatus.findOneAndUpdate({ workspaceId }, { workspaceId, data: status }, { upsert: true, new: true });
+    return status;
+  }
+
+  const store = getDemoStore();
+  store.inventorySyncStatus = store.inventorySyncStatus.filter((entry) => entry.workspaceId !== workspaceId);
+  store.inventorySyncStatus.push(status);
+  return status;
+}
+
+export async function getInventorySourceState(workspaceId: string) {
+  if (await databaseReady()) {
+    const status = (await InventorySyncStatus.findOne({ workspaceId }).lean()) as { data?: Record<string, unknown> } | null;
+    return normalizeInventoryStatus(workspaceId, status?.data);
+  }
+
+  const status = getDemoStore().inventorySyncStatus.find((entry) => entry.workspaceId === workspaceId);
+  return normalizeInventoryStatus(workspaceId, status);
+}
+
+export async function syncInventorySource(workspaceId: string) {
+  const current = await getInventorySourceState(workspaceId);
+
+  if (!isUsableInventorySource(current)) {
+    const warningStatus: InventorySourceState = {
+      ...disconnectedInventoryStatus(workspaceId),
+      status: "warning",
+      warningMessage: NO_INVENTORY_SOURCE_MESSAGE
+    };
+
+    return saveInventoryStatus(workspaceId, warningStatus);
+  }
+
+  const now = new Date().toISOString();
+  const nextConnectionStatus: Extract<InventorySourceStatus, "connected" | "demo_snapshot"> =
+    current.connectionType === "demo_snapshot" ? "demo_snapshot" : "connected";
+  const status: InventorySourceState = {
+    ...current,
+    latestConnectionLabel: sourceLabel(current.marketplaceName, current.connectionType),
+    lastSyncAt: now,
+    status: nextConnectionStatus,
+    warningMessage: undefined,
+    errorMessage: undefined
+  };
+
+  if (await databaseReady()) {
+    await Promise.all([
+      InventoryConnection.findOneAndUpdate(
+        { workspaceId },
+        {
+          "data.lastSyncAt": now,
+          "data.status": status.status
+        },
+        { sort: { createdAt: -1 } }
+      ),
+      InventorySyncStatus.findOneAndUpdate({ workspaceId }, { workspaceId, data: status }, { upsert: true, new: true }),
+      createAuditEvent(workspaceId, "inventory_source_resynced", {
+        marketplaceName: current.marketplaceName,
+        connectionType: current.connectionType
+      })
+    ]);
+  } else {
+    const store = getDemoStore();
+    store.inventoryConnections = store.inventoryConnections.map((entry) =>
+      entry.workspaceId === workspaceId ? { ...entry, lastSyncAt: now, status: nextConnectionStatus } : entry
+    );
+    store.inventorySyncStatus = store.inventorySyncStatus.filter((entry) => entry.workspaceId !== workspaceId);
+    store.inventorySyncStatus.push(status);
+    store.auditEvents.push({
+      id: randomUUID(),
+      workspaceId,
+      action: "inventory_source_resynced",
+      metadata: {
+        marketplaceName: current.marketplaceName,
+        connectionType: current.connectionType
+      },
+      createdAt: now
+    });
+  }
+
+  return status;
+}
+
+export async function removeInventorySource(workspaceId: string) {
+  const now = new Date().toISOString();
+  const status = disconnectedInventoryStatus(workspaceId);
+
+  if (await databaseReady()) {
+    await Promise.all([
+      InventoryConnection.deleteMany({ workspaceId }),
+      InventorySyncStatus.findOneAndUpdate({ workspaceId }, { workspaceId, data: status }, { upsert: true, new: true }),
+      createAuditEvent(workspaceId, "inventory_source_removed", {})
+    ]);
+  } else {
+    const store = getDemoStore();
+    store.inventoryConnections = store.inventoryConnections.filter((entry) => entry.workspaceId !== workspaceId);
+    store.inventorySyncStatus = store.inventorySyncStatus.filter((entry) => entry.workspaceId !== workspaceId);
+    store.inventorySyncStatus.push(status);
+    store.auditEvents.push({
+      id: randomUUID(),
+      workspaceId,
+      action: "inventory_source_removed",
+      metadata: {},
+      createdAt: now
+    });
+  }
+
+  return status;
 }
 
 export async function simulateCreditPurchase(workspaceId: string, payload: DemoPaymentPayload) {

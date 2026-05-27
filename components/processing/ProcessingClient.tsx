@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, CircleDashed, DatabaseZap, Radar, ShieldAlert } from "lucide-react";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { StatusDot } from "@/components/ui/StatusDot";
-import { VisibleAssistants, type AssistantId, type MarketContextPayload, type SourceMode } from "@/lib/schemas/ami";
+import {
+  VisibleAssistants,
+  type AnalysisResult,
+  type AssistantId,
+  type MarketContextPayload,
+  type SourceMode
+} from "@/lib/schemas/ami";
 
 type AssistantState = "pending" | "running" | "completed" | "warning" | "failed" | "skipped" | "limited";
 
@@ -43,6 +49,34 @@ function formatMode(mode: SourceMode) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function assistantStateFromResult(status: string | undefined): AssistantState {
+  if (status === "completed" || status === "warning" || status === "failed" || status === "skipped" || status === "running") {
+    return status;
+  }
+
+  return "completed";
+}
+
+function dotTone(state: AssistantState): "teal" | "amber" | "red" | "green" | "slate" {
+  if (state === "completed") {
+    return "green";
+  }
+
+  if (state === "running") {
+    return "teal";
+  }
+
+  if (state === "warning" || state === "limited") {
+    return "amber";
+  }
+
+  if (state === "failed") {
+    return "red";
+  }
+
+  return "slate";
 }
 
 export function ProcessingClient() {
@@ -123,21 +157,37 @@ export function ProcessingClient() {
         });
 
         if (!response.ok) {
-          setAssistantStates((current) => ({ ...current, inventory: "warning" }));
-          setMessage("AMI could not complete this analysis. Return to Briefing and validate the context.");
+          const payload = await response.json().catch(() => ({ error: "" }));
+          setProgress(100);
+          setAssistantStates((current) => ({ ...current, inventory: "failed" }));
+          setSourceStatus("Analysis stopped");
+          setMessage(payload.error || "AMI could not complete this analysis. Return to Briefing and validate the context.");
           return;
         }
 
-        const result = await response.json();
+        const result = (await response.json()) as AnalysisResult;
+        const inventoryState = assistantStateFromResult(result.assistantStatus?.inventory);
         setAssistantStates({
-          trend: "completed",
-          competitor: "completed",
-          supplier: "completed",
-          inventory: inventoryCanBeLimited ? "limited" : "completed"
+          trend: assistantStateFromResult(result.assistantStatus?.trend),
+          competitor: assistantStateFromResult(result.assistantStatus?.competitor),
+          supplier: assistantStateFromResult(result.assistantStatus?.supplier),
+          inventory: inventoryCanBeLimited && inventoryState === "skipped" ? "limited" : inventoryState
         });
+        setActivity((current) => ({
+          ...current,
+          inventory:
+            inventoryState === "warning"
+              ? "Inventory context was requested but unavailable, so AMI continued without it."
+              : inventoryState === "skipped"
+                ? "Inventory Assistant was skipped for this optional inventory run."
+                : "Inventory context resolved for this recommendation."
+        }));
         setProgress(100);
         setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
         setSourceStatus(result.sourceCollectionStatus?.label ?? "Source collection completed");
+        if (result.warnings?.length) {
+          setMessage(result.warnings[0]);
+        }
         window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
         window.setTimeout(() => router.push(`/recommendations?runId=${result.analysisRunId}`), 650);
       } catch (error) {
@@ -225,7 +275,7 @@ export function ProcessingClient() {
                 </div>
                 <p className="mt-2 min-h-20 text-sm leading-6 text-slate-600">{assistant.role}</p>
                 <div className="mt-4 flex items-center gap-2 text-sm font-semibold capitalize text-slate-700">
-                  <StatusDot tone={state === "completed" ? "green" : state === "running" ? "teal" : "slate"} />
+                  <StatusDot tone={dotTone(state)} />
                   {state}
                 </div>
                 <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Latest activity</p>

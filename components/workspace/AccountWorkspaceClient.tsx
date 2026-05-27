@@ -10,11 +10,12 @@ import {
   LinkIcon,
   RefreshCw,
   ShieldCheck,
+  Trash2,
   UserRound,
   WalletCards
 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
-import type { Recommendation } from "@/lib/schemas/ami";
+import type { InventoryConnectionType, InventorySourceStatus, Recommendation } from "@/lib/schemas/ami";
 
 type WorkspaceSnapshot = {
   user?: { name: string; email: string };
@@ -28,21 +29,45 @@ type WorkspaceSnapshot = {
   credits?: { balance: number; initialDemoCredits?: number; lastLedgerEvent: string };
   inventoryStatus?: {
     connected?: boolean;
+    marketplaceName?: string;
+    marketplaceUrl?: string;
+    connectionType?: InventoryConnectionType;
+    credentialType?: InventoryConnectionType;
     latestConnectionLabel?: string;
     lastSyncAt?: string | null;
     lastAnalysisAt?: string | null;
-    status?: string;
+    uploadedFileName?: string;
+    uploadedFileType?: "csv" | "json";
+    uploadedFileSize?: number;
+    status?: InventorySourceStatus;
+    warningMessage?: string;
+    errorMessage?: string;
   };
   savedReports?: Array<Record<string, unknown>>;
   approvedRecommendations?: Recommendation[];
 };
 
-const initialInventory = {
+type InventoryFormState = {
+  marketplaceName: string;
+  marketplaceUrl: string;
+  connectionType: InventoryConnectionType;
+  credentialType: InventoryConnectionType;
+  credential: string;
+  uploadedFileName: string;
+  uploadedFileType?: "csv" | "json";
+  uploadedFileSize?: number;
+  uploadedFileContent: string;
+};
+
+const initialInventory: InventoryFormState = {
   marketplaceName: "Amazon",
   marketplaceUrl: "https://www.amazon.com/",
-  connectionType: "demo_snapshot",
-  credentialType: "demo_snapshot",
-  credential: "demo"
+  connectionType: "marketplace_url",
+  credentialType: "marketplace_url",
+  credential: "",
+  uploadedFileName: "",
+  uploadedFileSize: undefined,
+  uploadedFileContent: ""
 };
 
 const mockPayment = {
@@ -63,19 +88,90 @@ function formatStatus(value: string | undefined) {
     .join(" ");
 }
 
+function badgeTone(status: InventorySourceStatus | undefined): "neutral" | "blue" | "teal" | "amber" | "red" | "green" {
+  if (status === "connected") {
+    return "green";
+  }
+
+  if (status === "demo_snapshot") {
+    return "teal";
+  }
+
+  if (status === "syncing") {
+    return "blue";
+  }
+
+  if (status === "warning") {
+    return "amber";
+  }
+
+  if (status === "error") {
+    return "red";
+  }
+
+  return "neutral";
+}
+
+function isCredentialConnection(type: InventoryConnectionType) {
+  return type === "api_key" || type === "bearer_token";
+}
+
+function isUploadConnection(type: InventoryConnectionType) {
+  return type === "csv_upload" || type === "json_upload";
+}
+
+function requiresMarketplaceUrl(type: InventoryConnectionType) {
+  return type === "marketplace_url" || type === "api_key" || type === "bearer_token";
+}
+
+function formatFileSize(size: number | undefined) {
+  if (typeof size !== "number") {
+    return "Size unavailable";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  return `${(size / 1024).toFixed(1)} KB`;
+}
+
+function inventoryFormFromStatus(status: WorkspaceSnapshot["inventoryStatus"]): InventoryFormState {
+  if (!status?.connected || !status.connectionType) {
+    return initialInventory;
+  }
+
+  return {
+    marketplaceName: status.marketplaceName ?? "Amazon",
+    marketplaceUrl: status.marketplaceUrl ?? "",
+    connectionType: status.connectionType,
+    credentialType: status.connectionType,
+    credential: "",
+    uploadedFileName: status.uploadedFileName ?? "",
+    uploadedFileType: status.uploadedFileType,
+    uploadedFileSize: status.uploadedFileSize,
+    uploadedFileContent: ""
+  };
+}
+
 export function AccountWorkspaceClient() {
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot>({});
   const [inventory, setInventory] = useState(initialInventory);
   const [paymentCleared, setPaymentCleared] = useState(false);
   const [showPaymentMock, setShowPaymentMock] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"info" | "error">("info");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [inventoryBusy, setInventoryBusy] = useState<"connect" | "sync" | "remove" | null>(null);
 
   useEffect(() => {
     async function loadWorkspace() {
       const response = await fetch("/api/workspace");
 
       if (response.ok) {
-        setSnapshot(await response.json());
+        const nextSnapshot = (await response.json()) as WorkspaceSnapshot;
+        setSnapshot(nextSnapshot);
+        setInventory(inventoryFormFromStatus(nextSnapshot.inventoryStatus));
       }
     }
 
@@ -86,28 +182,218 @@ export function AccountWorkspaceClient() {
     const response = await fetch("/api/workspace");
 
     if (response.ok) {
-      setSnapshot(await response.json());
+      const nextSnapshot = (await response.json()) as WorkspaceSnapshot;
+      setSnapshot(nextSnapshot);
+      setInventory(inventoryFormFromStatus(nextSnapshot.inventoryStatus));
     }
+  }
+
+  function showMessage(nextMessage: string, tone: "info" | "error" = "info") {
+    setMessage(nextMessage);
+    setMessageTone(tone);
+  }
+
+  function updateConnectionType(connectionType: InventoryConnectionType) {
+    setInventory((current) => {
+      const keepUpload = isUploadConnection(connectionType) && current.connectionType === connectionType;
+
+      return {
+        ...current,
+        connectionType,
+        credentialType: connectionType,
+        credential: isCredentialConnection(connectionType) ? current.credential : "",
+        uploadedFileName: keepUpload ? current.uploadedFileName : "",
+        uploadedFileType: keepUpload ? current.uploadedFileType : undefined,
+        uploadedFileSize: keepUpload ? current.uploadedFileSize : undefined,
+        uploadedFileContent: keepUpload ? current.uploadedFileContent : ""
+      };
+    });
+    setUploadMessage("");
+    setMessage("");
+  }
+
+  function validateInventoryForm() {
+    if (!inventory.marketplaceName.trim()) {
+      return "Marketplace name is required.";
+    }
+
+    if (requiresMarketplaceUrl(inventory.connectionType) && !inventory.marketplaceUrl.trim()) {
+      return "Marketplace URL is required for this connection type.";
+    }
+
+    if (inventory.connectionType === "api_key" && !inventory.credential.trim()) {
+      return "API key is required.";
+    }
+
+    if (inventory.connectionType === "bearer_token" && !inventory.credential.trim()) {
+      return "Bearer token is required.";
+    }
+
+    if (inventory.connectionType === "csv_upload" && (!inventory.uploadedFileName || !inventory.uploadedFileContent)) {
+      return "CSV file is required before connecting.";
+    }
+
+    if (inventory.connectionType === "json_upload" && (!inventory.uploadedFileName || !inventory.uploadedFileContent)) {
+      return "JSON file is required before connecting.";
+    }
+
+    return "";
+  }
+
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    const expectedType = inventory.connectionType === "json_upload" ? "json" : "csv";
+
+    if (!file) {
+      setInventory((current) => ({
+        ...current,
+        uploadedFileName: "",
+        uploadedFileType: undefined,
+        uploadedFileSize: undefined,
+        uploadedFileContent: ""
+      }));
+      setUploadMessage("");
+      return;
+    }
+
+    const extensionOk = file.name.toLowerCase().endsWith(`.${expectedType}`);
+    const mimeOk = expectedType === "csv" ? file.type === "text/csv" : file.type === "application/json";
+
+    if (!extensionOk && !mimeOk) {
+      event.currentTarget.value = "";
+      setInventory((current) => ({
+        ...current,
+        uploadedFileName: "",
+        uploadedFileType: undefined,
+        uploadedFileSize: undefined,
+        uploadedFileContent: ""
+      }));
+      setUploadMessage(`Selected file must be a .${expectedType} file.`);
+      return;
+    }
+
+    const content = await file.text();
+
+    if (expectedType === "json") {
+      try {
+        JSON.parse(content);
+      } catch {
+        event.currentTarget.value = "";
+        setInventory((current) => ({
+          ...current,
+          uploadedFileName: "",
+          uploadedFileType: undefined,
+          uploadedFileSize: undefined,
+          uploadedFileContent: ""
+        }));
+        setUploadMessage("Selected JSON file must contain parseable JSON.");
+        return;
+      }
+    }
+
+    setInventory((current) => ({
+      ...current,
+      uploadedFileName: file.name,
+      uploadedFileType: expectedType,
+      uploadedFileSize: file.size,
+      uploadedFileContent: content
+    }));
+    setUploadMessage(`${file.name} selected (${formatFileSize(file.size)}).`);
   }
 
   async function connectInventory(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const validationError = validateInventoryForm();
+
+    if (validationError) {
+      showMessage(validationError, "error");
+      return;
+    }
+
+    setInventoryBusy("connect");
     setMessage("");
     const response = await fetch("/api/inventory/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(inventory)
     });
+    setInventoryBusy(null);
 
     if (!response.ok) {
       const error = await response.json();
-      setMessage(error.error ?? "Inventory source could not be connected.");
+      showMessage(error.error ?? "Inventory source could not be connected.", "error");
       return;
     }
 
-    setInventory((current) => ({ ...current, credential: "" }));
-    setMessage("Inventory context connected. Credentials are stored encrypted and shown only as masked metadata.");
+    const payload = await response.json();
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(inventoryFormFromStatus(payload.inventoryStatus));
+    setUploadMessage("");
+    showMessage(
+      isCredentialConnection(inventory.connectionType)
+        ? "Inventory context connected. Credentials are stored encrypted and shown only as masked metadata."
+        : "Inventory context connected.",
+      "info"
+    );
     await load();
+  }
+
+  async function resyncInventory() {
+    if (snapshot.inventoryStatus?.connected && snapshot.inventoryStatus.connectionType !== inventory.connectionType) {
+      showMessage("Connect the selected inventory source before re-syncing.", "error");
+      return;
+    }
+
+    setInventoryBusy("sync");
+    setMessage("");
+    setSnapshot((current) => ({
+      ...current,
+      inventoryStatus: current.inventoryStatus
+        ? { ...current.inventoryStatus, status: "syncing" }
+        : {
+            connected: false,
+            latestConnectionLabel: "No inventory source connected",
+            lastSyncAt: null,
+            lastAnalysisAt: null,
+            status: "syncing"
+          }
+    }));
+
+    const response = await fetch("/api/inventory/sync", { method: "POST" });
+    setInventoryBusy(null);
+
+    if (!response.ok) {
+      showMessage("Inventory source could not be re-synced.", "error");
+      return;
+    }
+
+    const payload = await response.json();
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(inventoryFormFromStatus(payload.inventoryStatus));
+    showMessage(
+      payload.inventoryStatus?.status === "warning"
+        ? payload.inventoryStatus.warningMessage ?? "No inventory source is connected."
+        : "Inventory source re-synced.",
+      payload.inventoryStatus?.status === "warning" ? "error" : "info"
+    );
+  }
+
+  async function removeInventory() {
+    setInventoryBusy("remove");
+    setMessage("");
+    const response = await fetch("/api/inventory/connect", { method: "DELETE" });
+    setInventoryBusy(null);
+
+    if (!response.ok) {
+      showMessage("Inventory source could not be removed.", "error");
+      return;
+    }
+
+    const payload = await response.json();
+    setSnapshot((current) => ({ ...current, inventoryStatus: payload.inventoryStatus }));
+    setInventory(initialInventory);
+    setUploadMessage("");
+    showMessage("Inventory source removed.", "info");
   }
 
   const workspace = snapshot.workspace ?? {};
@@ -117,6 +403,14 @@ export function AccountWorkspaceClient() {
   const availableCredits = snapshot.credits?.balance ?? 250;
   const creditsUsed = Math.max(0, monthlyLimit - availableCredits);
   const payment = paymentCleared ? { ...mockPayment, last4: "Not set", paymentStatus: "Demo method removed" } : mockPayment;
+  const selectedDiffersFromSaved = Boolean(
+    inventoryStatus?.connected && inventoryStatus.connectionType && inventoryStatus.connectionType !== inventory.connectionType
+  );
+  const visibleInventoryStatus = selectedDiffersFromSaved ? "not_connected" : inventoryStatus?.status;
+  const visibleConnectionLabel = selectedDiffersFromSaved
+    ? `${inventory.marketplaceName || "Marketplace"} - ${inventory.connectionType} (not connected)`
+    : inventoryStatus?.latestConnectionLabel ?? "No inventory source connected";
+  const visibleLastSyncAt = selectedDiffersFromSaved ? null : inventoryStatus?.lastSyncAt;
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -127,7 +421,15 @@ export function AccountWorkspaceClient() {
           Manage workspace context, linked services, inventory source, recommendation history, and demo credits.
         </p>
 
-        {message && <p className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">{message}</p>}
+        {message && (
+          <p
+            className={`mt-5 rounded-lg border p-3 text-sm ${
+              messageTone === "error" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-teal-200 bg-teal-50 text-teal-900"
+            }`}
+          >
+            {message}
+          </p>
+        )}
       </section>
 
       <details className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" open>
@@ -183,7 +485,7 @@ export function AccountWorkspaceClient() {
                 type="button"
                 onClick={() => {
                   setPaymentCleared(true);
-                  setMessage("Mock payment method removed from this local view only.");
+                  showMessage("Mock payment method removed from this local view only.", "info");
                 }}
                 className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
               >
@@ -230,13 +532,28 @@ export function AccountWorkspaceClient() {
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-slate-950">Sync status</p>
-                <Badge tone={inventoryStatus?.connected ? "green" : "neutral"}>{formatStatus(inventoryStatus?.status)}</Badge>
+                <Badge tone={badgeTone(visibleInventoryStatus)}>{formatStatus(visibleInventoryStatus)}</Badge>
               </div>
-              <p className="mt-2 text-sm text-slate-700">{inventoryStatus?.latestConnectionLabel ?? "No inventory source connected"}</p>
+              <p className="mt-2 text-sm text-slate-700">{visibleConnectionLabel}</p>
               <p className="mt-2 text-sm text-slate-600">
                 Latest sync timestamp:{" "}
-                {inventoryStatus?.lastSyncAt ? new Date(inventoryStatus.lastSyncAt).toLocaleString() : "Not available"}
+                {visibleLastSyncAt ? new Date(visibleLastSyncAt).toLocaleString() : "Not available"}
               </p>
+              {!selectedDiffersFromSaved && inventoryStatus?.uploadedFileName && (
+                <p className="mt-2 text-sm text-slate-600">
+                  Uploaded file: {inventoryStatus.uploadedFileName} ({formatFileSize(inventoryStatus.uploadedFileSize)})
+                </p>
+              )}
+              {!selectedDiffersFromSaved && inventoryStatus?.warningMessage && (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                  {inventoryStatus.warningMessage}
+                </p>
+              )}
+              {!selectedDiffersFromSaved && inventoryStatus?.errorMessage && (
+                <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+                  {inventoryStatus.errorMessage}
+                </p>
+              )}
             </div>
 
             <form onSubmit={connectInventory} className="mt-4 grid gap-4">
@@ -246,16 +563,19 @@ export function AccountWorkspaceClient() {
                   value={inventory.marketplaceName}
                   onChange={(value) => setInventory((current) => ({ ...current, marketplaceName: value }))}
                 />
-                <Field
-                  label="Marketplace URL"
-                  value={inventory.marketplaceUrl}
-                  onChange={(value) => setInventory((current) => ({ ...current, marketplaceUrl: value }))}
-                />
+                {inventory.connectionType !== "demo_snapshot" && (
+                  <Field
+                    label={requiresMarketplaceUrl(inventory.connectionType) ? "Marketplace URL" : "Marketplace URL (optional)"}
+                    required={requiresMarketplaceUrl(inventory.connectionType)}
+                    value={inventory.marketplaceUrl}
+                    onChange={(value) => setInventory((current) => ({ ...current, marketplaceUrl: value }))}
+                  />
+                )}
                 <label className="block">
                   <span className="text-xs font-semibold uppercase text-slate-500">Connection type</span>
                   <select
                     value={inventory.connectionType}
-                    onChange={(event) => setInventory((current) => ({ ...current, connectionType: event.target.value }))}
+                    onChange={(event) => updateConnectionType(event.target.value as InventoryConnectionType)}
                     className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
                   >
                     <option value="marketplace_url">marketplace_url</option>
@@ -266,42 +586,79 @@ export function AccountWorkspaceClient() {
                     <option value="demo_snapshot">demo_snapshot</option>
                   </select>
                 </label>
-                <Field
-                  label="Credential type"
-                  value={inventory.credentialType}
-                  onChange={(value) => setInventory((current) => ({ ...current, credentialType: value }))}
-                />
+                <DisabledField label="Credential type" value={inventory.credentialType} />
               </div>
-              <label className="block">
-                <span className="text-xs font-semibold uppercase text-slate-500">Secure credential input</span>
-                <input
-                  type="password"
-                  value={inventory.credential}
-                  onChange={(event) => setInventory((current) => ({ ...current, credential: event.target.value }))}
-                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
-                />
-              </label>
+              {isCredentialConnection(inventory.connectionType) && (
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Secure credential input</span>
+                  <input
+                    type="password"
+                    value={inventory.credential}
+                    placeholder={inventory.connectionType === "api_key" ? "Enter API key" : "Enter bearer token"}
+                    onChange={(event) => setInventory((current) => ({ ...current, credential: event.target.value }))}
+                    className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                  />
+                </label>
+              )}
+              {isUploadConnection(inventory.connectionType) && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <label className="block">
+                    <span className="text-xs font-semibold uppercase text-slate-500">
+                      {inventory.connectionType === "csv_upload" ? "CSV upload" : "JSON upload"}
+                    </span>
+                    <input
+                      key={inventory.connectionType}
+                      type="file"
+                      accept={inventory.connectionType === "csv_upload" ? ".csv,text/csv" : ".json,application/json"}
+                      onChange={handleFileChange}
+                      className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-teal-700 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-teal-800"
+                    />
+                  </label>
+                  {(inventory.uploadedFileName || uploadMessage) && (
+                    <div className="mt-3 text-sm text-slate-700">
+                      {inventory.uploadedFileName && (
+                        <p>
+                          Selected file: {inventory.uploadedFileName} ({formatFileSize(inventory.uploadedFileSize)})
+                        </p>
+                      )}
+                      {uploadMessage && (
+                        <p className={inventory.uploadedFileName ? "mt-1 text-slate-600" : "text-amber-800"}>{uploadMessage}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {inventory.connectionType === "demo_snapshot" && (
+                <p className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                  Uses AMI demo inventory data for local testing.
+                </p>
+              )}
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <LinkIcon size={18} />
-                  Connect Inventory Source
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-                >
-                  <RefreshCw size={18} />
-                  Re-sync Inventory
+                  {inventoryBusy === "connect" ? "Connecting..." : "Connect Inventory Source"}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMessage("Remove Inventory Source is a mock control in this MVP. No credentials were exposed.")}
-                  className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
+                  onClick={resyncInventory}
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Remove Inventory Source
+                  <RefreshCw size={18} />
+                  {inventoryBusy === "sync" ? "Re-syncing..." : "Re-sync Inventory"}
+                </button>
+                <button
+                  type="button"
+                  onClick={removeInventory}
+                  disabled={Boolean(inventoryBusy)}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Trash2 size={18} />
+                  {inventoryBusy === "remove" ? "Removing..." : "Remove Inventory Source"}
                 </button>
               </div>
             </form>
@@ -386,17 +743,19 @@ function DisabledField({ label, value }: { label: string; value: string }) {
 function Field({
   label,
   value,
-  onChange
+  onChange,
+  required = true
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  required?: boolean;
 }) {
   return (
     <label className="block">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
-        required
+        required={required}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
