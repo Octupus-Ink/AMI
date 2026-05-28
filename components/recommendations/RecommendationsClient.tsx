@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ChevronLeft,
   ChevronRight,
   FileSearch,
   ShieldAlert
@@ -56,6 +57,8 @@ function assistantTone(status: string | undefined): "neutral" | "green" | "amber
 
 const promoKeywords = ["promo", "promotion", "monitor", "campaign", "bundle", "seasonal", "validation", "rollout"];
 
+type RowDisplayVariant = "product" | "promo" | "inventory";
+
 type PreviewRowData = {
   id: string;
   title: string;
@@ -63,6 +66,16 @@ type PreviewRowData = {
   risk: "low" | "medium" | "high";
   confidence?: "low" | "medium" | "high";
   meta?: string;
+  variant: RowDisplayVariant;
+};
+
+const inventoryTitleMaxLength = 72;
+
+type PromoMetaInput = {
+  assistantId?: string;
+  dataFreshness?: string;
+  sourceLabel?: string;
+  recommendedAction?: string;
 };
 
 function riskBadgeTone(risk: "low" | "medium" | "high") {
@@ -75,6 +88,135 @@ function formatMargin(estimatedMargin: number | undefined) {
   }
 
   return `Est. margin ${estimatedMargin.toFixed(1)}%`;
+}
+
+function formatPromoMeta(input: PromoMetaInput) {
+  if (input.assistantId === "competitor") {
+    return "Signal: competitor pressure";
+  }
+
+  if (input.assistantId === "trend") {
+    return "Signal: seasonal demand";
+  }
+
+  const action = input.recommendedAction?.toLowerCase() ?? "";
+
+  if (action.includes("competitor") || action.includes("promotion")) {
+    return "Signal: competitor pressure";
+  }
+
+  if (action.includes("seasonal")) {
+    return "Timing: seasonal validation";
+  }
+
+  if (action.includes("validation") || action.includes("rollout") || action.includes("campaign")) {
+    return "Timing: validation window";
+  }
+
+  const timingSource = input.dataFreshness || input.sourceLabel;
+
+  if (!timingSource) {
+    return undefined;
+  }
+
+  const timingLower = timingSource.toLowerCase();
+
+  if (timingLower.includes("season")) {
+    return "Timing: seasonal validation";
+  }
+
+  if (timingLower.includes("run") || timingLower.includes("collected") || timingLower.includes("snapshot")) {
+    return "Timing: validation window";
+  }
+
+  if (timingSource.length <= 40) {
+    return `Timing: ${timingSource}`;
+  }
+
+  return undefined;
+}
+
+function inventoryDisplayTitle(finding: string, fallbackTitle?: string) {
+  if (finding.length <= inventoryTitleMaxLength) {
+    return finding;
+  }
+
+  return fallbackTitle ?? finding;
+}
+
+function getViewportPagination(width: number) {
+  if (width >= 1024) {
+    return { pageSize: 24, columns: 2 as const };
+  }
+
+  if (width >= 768) {
+    return { pageSize: 12, columns: 2 as const };
+  }
+
+  return { pageSize: 6, columns: 1 as const };
+}
+
+function useViewportPagination() {
+  const [config, setConfig] = useState(() =>
+    typeof window !== "undefined" ? getViewportPagination(window.innerWidth) : { pageSize: 24, columns: 2 as const }
+  );
+
+  useEffect(() => {
+    function update() {
+      setConfig(getViewportPagination(window.innerWidth));
+    }
+
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  return config;
+}
+
+function getPageCount(total: number, pageSize: number) {
+  if (total === 0) {
+    return 0;
+  }
+
+  return Math.ceil(total / pageSize);
+}
+
+function getPageSlice<T>(items: T[], page: number, pageSize: number) {
+  const start = page * pageSize;
+  return items.slice(start, start + pageSize);
+}
+
+function formatRange(start: number, end: number, total: number, label: string) {
+  return `${start}–${end} of ${total} ${label}`;
+}
+
+function toggleSelection(setSelectedIds: Dispatch<SetStateAction<Set<string>>>, rowId: string, checked: boolean) {
+  setSelectedIds((current) => {
+    const next = new Set(current);
+
+    if (checked) {
+      next.add(rowId);
+    } else {
+      next.delete(rowId);
+    }
+
+    return next;
+  });
+}
+
+function deriveProductCandidates(analysis: AnalysisResult): PreviewRowData[] {
+  const productName = analysis.marketContext.productName;
+
+  return analysis.opportunities.map((opportunity) => ({
+    id: `product-${opportunity.recommendationId}`,
+    title: productName,
+    summary: opportunity.primaryReason,
+    risk: opportunity.riskLevel,
+    confidence: opportunity.confidenceLevel,
+    meta: formatMargin(opportunity.estimatedMargin),
+    variant: "product"
+  }));
 }
 
 function isPromoLikeText(text: string) {
@@ -95,7 +237,11 @@ function derivePromoCandidates(analysis: AnalysisResult): PreviewRowData[] {
       summary: opportunity.primaryReason,
       risk: opportunity.riskLevel,
       confidence: opportunity.confidenceLevel,
-      meta: opportunity.dataFreshness
+      meta: formatPromoMeta({
+        recommendedAction: opportunity.recommendedAction,
+        dataFreshness: opportunity.dataFreshness
+      }),
+      variant: "promo"
     }));
   }
 
@@ -109,7 +255,12 @@ function derivePromoCandidates(analysis: AnalysisResult): PreviewRowData[] {
     summary: finding.reason,
     risk: finding.risk,
     confidence: finding.confidence,
-    meta: finding.dataFreshness || finding.sourceLabel
+    meta: formatPromoMeta({
+      assistantId: finding.assistantId,
+      dataFreshness: finding.dataFreshness,
+      sourceLabel: finding.sourceLabel
+    }),
+    variant: "promo"
   }));
 }
 
@@ -122,6 +273,8 @@ function deriveInventoryActions(analysis: AnalysisResult, selected: AnalysisResu
   const seenTitles = new Set<string>();
   const affectedLabel = analysis.marketContext.category || analysis.marketContext.productName;
   const affectedMeta = affectedLabel ? `Affected: ${affectedLabel}` : undefined;
+  const inventoryContribution = selected.assistantContributions.find((contribution) => contribution.assistantId === "inventory");
+  const shortActionTitle = inventoryContribution?.latestContribution;
 
   for (const finding of analysis.assistantFindings.filter((item) => item.assistantId === "inventory")) {
     if (seenTitles.has(finding.finding)) {
@@ -131,15 +284,14 @@ function deriveInventoryActions(analysis: AnalysisResult, selected: AnalysisResu
     seenTitles.add(finding.finding);
     rows.push({
       id: `finding-${finding.finding}`,
-      title: finding.finding,
+      title: inventoryDisplayTitle(finding.finding, shortActionTitle),
       summary: finding.reason,
       risk: finding.risk,
       confidence: finding.confidence,
-      meta: affectedMeta
+      meta: affectedMeta,
+      variant: "inventory"
     });
   }
-
-  const inventoryContribution = selected.assistantContributions.find((contribution) => contribution.assistantId === "inventory");
 
   if (inventoryContribution && !seenTitles.has(inventoryContribution.latestContribution)) {
     rows.push({
@@ -148,7 +300,8 @@ function deriveInventoryActions(analysis: AnalysisResult, selected: AnalysisResu
       summary: inventoryContribution.summary,
       risk: inventoryContribution.risk,
       confidence: inventoryContribution.confidence,
-      meta: affectedMeta
+      meta: affectedMeta,
+      variant: "inventory"
     });
   }
 
@@ -371,90 +524,80 @@ function ActiveTabContent({
   evidence: AnalysisResult["evidencePackages"][number] | undefined;
   suppliers: SupplierOption[];
 }) {
-  const promoCandidates = derivePromoCandidates(analysis);
-  const inventoryActions = deriveInventoryActions(analysis, selected);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(() => new Set());
+  const [selectedPromoIds, setSelectedPromoIds] = useState<Set<string>>(() => new Set());
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(() => new Set());
+  const [productPage, setProductPage] = useState(0);
+  const [promoPage, setPromoPage] = useState(0);
+  const [inventoryPage, setInventoryPage] = useState(0);
+
+  const productRows = useMemo(() => deriveProductCandidates(analysis), [analysis]);
+  const promoRows = useMemo(
+    () => derivePromoCandidates(analysis).map((row) => ({ ...row, id: `promo-${row.id}` })),
+    [analysis]
+  );
+  const inventoryRows = useMemo(
+    () => deriveInventoryActions(analysis, selected).map((row) => ({ ...row, id: `inventory-${row.id}` })),
+    [analysis, selected]
+  );
 
   if (activeTab === "Product Candidates") {
     return (
-      <div>
-        <TabHeader title="Product Candidates" description="Product candidates generated from this analysis." />
-        <div className="mt-4 flex flex-col">
-          {analysis.opportunities.length > 0 ? (
-            analysis.opportunities.map((recommendation) => (
-              <PreviewRow
-                key={recommendation.recommendationId}
-                title={recommendation.recommendedAction}
-                summary={recommendation.primaryReason}
-                risk={recommendation.riskLevel}
-                confidence={recommendation.confidenceLevel}
-                meta={formatMargin(recommendation.estimatedMargin)}
-              />
-            ))
-          ) : (
-            <LimitedDataState message="Product candidates generated from this analysis will appear here when available." />
-          )}
-        </div>
-      </div>
+      <SelectablePaginatedTab
+        title="Product Candidates"
+        description="Product candidates generated from this analysis."
+        rows={productRows}
+        rowLabel="product candidates"
+        selectedIds={selectedProductIds}
+        onToggle={(rowId, checked) => toggleSelection(setSelectedProductIds, rowId, checked)}
+        page={productPage}
+        onPageChange={setProductPage}
+        emptyState={
+          <LimitedDataState message="Product candidates generated from this analysis will appear here when available." />
+        }
+      />
     );
   }
 
   if (activeTab === "Promo Candidates") {
     return (
-      <div>
-        <TabHeader
-          title="Promo Candidates"
-          description="Promotion-oriented suggestions from trend, competitor, and market timing signals in this analysis."
-        />
-        <div className="mt-4 flex flex-col">
-          {promoCandidates.length > 0 ? (
-            promoCandidates.map((candidate) => (
-              <PreviewRow
-                key={candidate.id}
-                title={candidate.title}
-                summary={candidate.summary}
-                risk={candidate.risk}
-                confidence={candidate.confidence}
-                meta={candidate.meta}
-              />
-            ))
-          ) : (
-            <LimitedDataState
-              message="Promotion candidates are not available for this analysis yet."
-              detail="AMI found market signals that may support future promotion planning, but no dedicated promotion output has been generated."
-            />
-          )}
-        </div>
-      </div>
+      <SelectablePaginatedTab
+        title="Promo Candidates"
+        description="Promotion-oriented suggestions from trend, competitor, and market timing signals in this analysis."
+        rows={promoRows}
+        rowLabel="promo candidates"
+        selectedIds={selectedPromoIds}
+        onToggle={(rowId, checked) => toggleSelection(setSelectedPromoIds, rowId, checked)}
+        page={promoPage}
+        onPageChange={setPromoPage}
+        emptyState={
+          <LimitedDataState
+            message="Promotion candidates are not available for this analysis yet."
+            detail="AMI found market signals that may support future promotion planning, but no dedicated promotion output has been generated."
+          />
+        }
+      />
     );
   }
 
   if (activeTab === "Inventory Actions") {
     return (
-      <div>
-        <TabHeader
-          title="Inventory Actions"
-          description="Inventory actions generated from workspace context and market signals."
-        />
-        <div className="mt-4 flex flex-col">
-          {inventoryActions.length > 0 ? (
-            inventoryActions.map((action) => (
-              <PreviewRow
-                key={action.id}
-                title={action.title}
-                summary={action.summary}
-                risk={action.risk}
-                confidence={action.confidence}
-                meta={action.meta}
-              />
-            ))
-          ) : (
-            <LimitedDataState
-              message="No dedicated inventory actions were generated for this analysis."
-              detail="AMI will show inventory actions here when workspace inventory context produces operational recommendations."
-            />
-          )}
-        </div>
-      </div>
+      <SelectablePaginatedTab
+        title="Inventory Actions"
+        description="Inventory actions generated from workspace context and market signals."
+        rows={inventoryRows}
+        rowLabel="inventory actions"
+        selectedIds={selectedInventoryIds}
+        onToggle={(rowId, checked) => toggleSelection(setSelectedInventoryIds, rowId, checked)}
+        page={inventoryPage}
+        onPageChange={setInventoryPage}
+        emptyState={
+          <LimitedDataState
+            message="No dedicated inventory actions were generated for this analysis."
+            detail="AMI will show inventory actions here when workspace inventory context produces operational recommendations."
+          />
+        }
+      />
     );
   }
 
@@ -546,21 +689,144 @@ function ActiveTabContent({
   );
 }
 
+function SelectablePaginatedTab({
+  title,
+  description,
+  rows,
+  rowLabel,
+  selectedIds,
+  onToggle,
+  page,
+  onPageChange,
+  emptyState
+}: {
+  title: string;
+  description: string;
+  rows: PreviewRowData[];
+  rowLabel: string;
+  selectedIds: Set<string>;
+  onToggle: (rowId: string, checked: boolean) => void;
+  page: number;
+  onPageChange: (page: number) => void;
+  emptyState: ReactNode;
+}) {
+  const { pageSize, columns } = useViewportPagination();
+  const total = rows.length;
+  const pageCount = getPageCount(total, pageSize);
+  const effectivePage = pageCount > 0 ? Math.min(page, pageCount - 1) : 0;
+  const pageRows = getPageSlice(rows, effectivePage, pageSize);
+  const rangeStart = total === 0 ? 0 : effectivePage * pageSize + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min((effectivePage + 1) * pageSize, total);
+
+  useEffect(() => {
+    if (effectivePage !== page) {
+      onPageChange(effectivePage);
+    }
+  }, [effectivePage, page, onPageChange]);
+
+  const gridClass = columns === 2 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1";
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <TabHeader title={title} description={description} />
+        <p className="text-sm text-slate-600">{selectedIds.size} selected</p>
+      </div>
+
+      {total === 0 ? (
+        <div className="mt-4">{emptyState}</div>
+      ) : (
+        <>
+          <div className={`mt-4 grid gap-x-6 ${gridClass}`}>
+            {pageRows.map((row) => (
+              <PreviewRow
+                key={row.id}
+                title={row.title}
+                summary={row.summary}
+                risk={row.risk}
+                confidence={row.confidence}
+                meta={row.meta}
+                variant={row.variant}
+                selectable
+                checked={selectedIds.has(row.id)}
+                onCheckedChange={(checked) => onToggle(row.id, checked)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+            <p className="text-sm text-slate-600">{formatRange(rangeStart, rangeEnd, total, rowLabel)}</p>
+            {pageCount > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onPageChange(Math.max(0, effectivePage - 1))}
+                  disabled={effectivePage === 0}
+                  className="inline-flex min-h-9 items-center gap-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft size={16} />
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onPageChange(Math.min(pageCount - 1, effectivePage + 1))}
+                  disabled={effectivePage >= pageCount - 1}
+                  className="inline-flex min-h-9 items-center gap-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PreviewRow({
   title,
   summary,
   risk,
   confidence,
-  meta
+  meta,
+  variant,
+  selectable = false,
+  checked = false,
+  onCheckedChange
 }: {
   title: string;
   summary: string;
   risk: "low" | "medium" | "high";
   confidence?: "low" | "medium" | "high";
   meta?: string;
+  variant?: RowDisplayVariant;
+  selectable?: boolean;
+  checked?: boolean;
+  onCheckedChange?: (checked: boolean) => void;
 }) {
-  return (
-    <div className="border-b border-slate-100 py-3 last:border-b-0">
+  if (selectable && variant) {
+    return (
+      <div className="flex items-start gap-3 border-b border-slate-100 py-2 last:border-b-0">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onCheckedChange?.(event.target.checked)}
+          aria-label={`Select ${title}`}
+          className="mt-0.5 size-4 shrink-0 rounded border-slate-300 text-teal-600 focus:ring-teal-600"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-950">{title}</p>
+          {meta && <p className="mt-0.5 text-xs text-slate-500">{meta}</p>}
+        </div>
+        <div className="hidden w-16 shrink-0 sm:block" aria-hidden />
+      </div>
+    );
+  }
+
+  const content = (
+    <div className="min-w-0 flex-1">
       <p className="text-sm font-semibold text-slate-950">{title}</p>
       <p className="mt-1 text-sm leading-6 text-slate-600">{summary}</p>
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
@@ -570,6 +836,8 @@ function PreviewRow({
       </div>
     </div>
   );
+
+  return <div className="border-b border-slate-100 py-3 last:border-b-0">{content}</div>;
 }
 
 function LimitedDataState({ message, detail }: { message: string; detail?: string }) {
