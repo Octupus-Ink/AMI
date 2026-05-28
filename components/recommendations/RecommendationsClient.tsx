@@ -3,21 +3,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  BadgeCheck,
-  BarChart3,
   ChevronRight,
-  Download,
   FileSearch,
-  RefreshCcw,
-  Save,
-  ShieldAlert,
-  Sparkles
+  ShieldAlert
 } from "lucide-react";
-import { DecisionSurface, DetailPanel, PageHeader, PageShell, Section, SectionHeader, Surface } from "@/components/layout/PagePrimitives";
+import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
 import type { AnalysisResult, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
+
+const strategyTabs = [
+  "Product Candidates",
+  "Promo Candidates",
+  "Inventory Actions",
+  "Supplier Comparison",
+  "Evidence & Reasoning"
+] as const;
+
+type StrategyTab = (typeof strategyTabs)[number];
 
 function formatMode(mode: SourceMode | string) {
   return String(mode)
@@ -72,6 +76,7 @@ export function RecommendationsClient() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
   const [message, setMessage] = useState("");
+  const [activeTab, setActiveTab] = useState<StrategyTab>("Product Candidates");
 
   useEffect(() => {
     async function load() {
@@ -111,69 +116,59 @@ export function RecommendationsClient() {
     return analysis.opportunities.find((recommendation) => recommendation.recommendationId === selectedId) ?? analysis.executiveRecommendation;
   }, [analysis, selectedId]);
 
-  async function action(kind: "save" | "approve" | "export") {
-    if (!selected) {
-      return;
-    }
-
-    const response = await fetch(`/api/recommendations/${selected.recommendationId}/${kind}`, {
-      method: "POST"
-    });
-
-    if (!response.ok) {
-      setMessage("AMI could not complete this strategy action.");
-      return;
-    }
-
-    const payload = await response.json();
-    setMessage(
-      kind === "approve"
-        ? "Recommendation approved and added to Control Hub history."
-        : kind === "save"
-          ? "Report saved to Control Hub."
-          : "Strategy summary exported as demo JSON."
-    );
-
-    if (kind === "export") {
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "ami-strategy-summary.demo.json";
-      anchor.click();
-      URL.revokeObjectURL(url);
-    }
-  }
-
   if (!analysis || !selected) {
-    return (
-      <PageShell className="max-w-6xl">
-        <PageHeader eyebrow={<Badge tone="teal">AMI Strategy</Badge>} title="Preparing strategy workspace" />
-      </PageShell>
-    );
+    return null;
   }
 
   const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === selected.evidencePackageId);
   const suppliers = analysis.supplierOptions?.length ? analysis.supplierOptions : fallbackSupplierOptions(analysis);
-  const expectedImpact =
-    selected.estimatedMargin > 0
-      ? `Protect approximately ${selected.estimatedMargin.toFixed(1)}% estimated margin while validating demand and sourcing fit.`
-      : "Validate demand, sourcing fit, and operational risk before committing budget.";
+  const strategySignals =
+    analysis.assistantFindings.length > 0
+      ? analysis.assistantFindings
+      : selected.assistantContributions.map((contribution) => ({
+          assistantId: contribution.assistantId,
+          finding: contribution.latestContribution,
+          reason: contribution.summary,
+          risk: contribution.risk,
+          confidence: contribution.confidence
+        }));
+  const promoCandidateCount = analysis.assistantFindings.filter(
+    (finding) => (finding.assistantId === "trend" || finding.assistantId === "competitor") && finding.signal !== "weak"
+  ).length;
+  const inventoryActionCount = analysis.assistantFindings.filter(
+    (finding) => finding.assistantId === "inventory" && analysis.assistantStatus?.inventory !== "skipped"
+  ).length;
 
   return (
     <PageShell>
-      <PageHeader
-        eyebrow={<Badge tone="teal">AMI Strategy</Badge>}
-        title="Review the prioritized recommendation"
-        description="Decision clarity first, then supporting signals, assistant reasoning, and evidence."
-        actions={
-          <div className="flex max-w-xl flex-wrap gap-2 text-sm">
-            <Meta label="Business goal" value={goalLabel(analysis.marketContext.businessGoal)} />
-            <Meta label="Last analysis" value={analysis.completedAt ? new Date(analysis.completedAt).toLocaleString() : "Pending"} />
-            <Meta label="Source mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
+      <section className="border-b border-slate-200 pb-7">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl">
+            <Badge tone="teal">AMI Strategy</Badge>
+            <p className="mt-5 text-xs font-semibold uppercase text-slate-500">Business goal</p>
+            <h1 className="mt-2 text-3xl font-semibold leading-tight text-slate-950 sm:text-4xl">
+              {goalLabel(analysis.marketContext.businessGoal)}
+            </h1>
+            <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 text-sm text-slate-600">
+              <span>
+                <span className="font-semibold text-slate-950">Last analysis:</span>{" "}
+                {analysis.completedAt ? new Date(analysis.completedAt).toLocaleString() : "Pending"}
+              </span>
+              <span>
+                <span className="font-semibold text-slate-950">Source mode:</span>{" "}
+                {formatMode(analysis.sourceCollectionStatus.mode)}
+              </span>
+              <BrightDataPill />
+            </div>
           </div>
-        }
-      />
+
+          <div className="flex w-full flex-wrap gap-3 lg:w-auto lg:justify-end">
+            <Counter label="Product Candidates" value={analysis.opportunities.length} />
+            <Counter label="Promo Candidates" value={promoCandidateCount} />
+            <Counter label="Inventory Actions" value={inventoryActionCount} />
+          </div>
+        </div>
+      </section>
 
       {analysis.warnings?.length > 0 && (
         <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -184,126 +179,33 @@ export function RecommendationsClient() {
         </section>
       )}
 
-      <Section className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        <DecisionSurface className="min-w-0 flex-1">
-          <div className="flex items-start gap-3">
-            <Sparkles className="mt-1 shrink-0 text-teal-800" size={22} />
-            <div>
-              <p className="text-xs font-semibold uppercase text-slate-500">Recommended action</p>
-              <h2 className="mt-2 text-2xl font-semibold text-slate-950">{selected.recommendedAction}</h2>
-              <div className="mt-5 flex flex-col gap-4">
-                <StrategyPoint label="Why it matters" value={selected.primaryReason} />
-                <StrategyPoint label="Expected business impact" value={expectedImpact} />
-                <StrategyPoint label="Suggested next step" value={selected.suggestedNextStep} />
-              </div>
-            </div>
+      <Section className="border-b border-slate-200 pb-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-950">AMI Strategy Signals | Category: {analysis.marketContext.category}</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              Interpreted signals explaining why AMI detected a strategic opening in this market context.
+            </p>
           </div>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Signal label="Confidence" value={selected.confidenceLevel} tone="blue" />
-            <Signal label="Risk" value={selected.riskLevel} tone={selected.riskLevel === "high" ? "red" : "amber"} />
-            <Signal label="Data freshness" value={selected.dataFreshness} tone="teal" />
-          </div>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => action("save")}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-            >
-              <Save size={18} />
-              Save report
-            </button>
-            <button
-              type="button"
-              onClick={() => action("approve")}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
-            >
-              <BadgeCheck size={18} />
-              Approve recommendation
-            </button>
-            <button
-              type="button"
-              onClick={() => action("export")}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-            >
-              <Download size={18} />
-              Export summary
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push("/market-context-setup")}
-              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-            >
-              <RefreshCcw size={18} />
-              Run new briefing
-            </button>
-          </div>
-
-          {message && <p className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">{message}</p>}
-        </DecisionSurface>
-
-        <aside className="w-full border-t border-slate-200 pt-5 lg:w-96 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="text-teal-700" size={20} />
-            <h2 className="text-lg font-semibold text-slate-950">Opportunity ranking</h2>
-          </div>
-          <div className="mt-4 space-y-3">
-            {analysis.opportunities.map((recommendation, index) => (
-              <button
-                key={recommendation.recommendationId}
-                type="button"
-                onClick={() => setSelectedId(recommendation.recommendationId)}
-                className={`w-full rounded-lg border p-4 text-left transition ${
-                  selectedId === recommendation.recommendationId
-                    ? "border-teal-300 bg-teal-50"
-                    : "border-slate-200 bg-white hover:border-teal-200"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold text-slate-500">#{index + 1}</span>
-                  <Badge tone={recommendation.riskLevel === "high" ? "red" : "amber"}>{recommendation.riskLevel} risk</Badge>
-                </div>
-                <p className="mt-3 text-sm font-semibold text-slate-950">{recommendation.recommendedAction}</p>
-                <p className="mt-2 text-xs text-slate-600">{recommendation.opportunityScore}/100 opportunity score</p>
-              </button>
-            ))}
-          </div>
-        </aside>
-      </Section>
-
-      <Section className="flex flex-wrap gap-3">
-        <Metric label="Opportunity score" value={`${selected.opportunityScore}/100`} />
-        <Metric label="Confidence" value={selected.confidenceLevel} />
-        <Metric label="Risk level" value={selected.riskLevel} />
-        <Metric label="Estimated margin" value={`${selected.estimatedMargin.toFixed(1)}%`} />
-        <Metric label="Demand signal" value={selected.demandSignal} />
-        <Metric label="Data freshness" value={selected.dataFreshness} />
-      </Section>
-
-      <Section className="border-t border-slate-200 pt-6">
-        <SectionHeader title="Assistant contribution summary" description="Five operational roles summarized as compact decision support." />
-        <div className="flex flex-col gap-3">
-          {selected.assistantContributions.map((contribution) => {
-            const assistant = VisibleAssistants.find((item) => item.id === contribution.assistantId);
+        </div>
+        <div className="mt-5 flex flex-col gap-4">
+          {strategySignals.map((signal) => {
+            const assistant = VisibleAssistants.find((item) => item.id === signal.assistantId);
 
             return (
-              <div key={contribution.assistantId} className="flex flex-col gap-3 border-b border-slate-200 py-4 last:border-b-0 lg:flex-row lg:items-start">
-                <div className="min-w-56">
-                  <p className="font-semibold text-slate-950">{assistant?.name}</p>
-                  <p className="mt-1 text-xs font-semibold uppercase text-slate-500">{assistant?.role}</p>
+              <div
+                key={`${signal.assistantId}-${signal.finding}`}
+                className="flex flex-col gap-3 border-b border-slate-100 py-3 last:border-b-0 sm:flex-row sm:items-start"
+              >
+                <div className="min-w-32">
+                  <Badge tone={signal.risk === "high" ? "red" : signal.risk === "medium" ? "amber" : "green"}>
+                    {signal.risk} risk
+                  </Badge>
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Badge tone={assistantTone(analysis.assistantStatus?.[contribution.assistantId])}>
-                      {formatMode(analysis.assistantStatus?.[contribution.assistantId] ?? "completed")}
-                    </Badge>
-                    <Badge tone={contribution.risk === "high" ? "red" : contribution.risk === "medium" ? "amber" : "green"}>
-                      {contribution.confidence}
-                    </Badge>
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{contribution.summary}</p>
-                  <p className="mt-2 text-sm font-semibold text-slate-800">{contribution.latestContribution}</p>
+                  <p className="text-sm font-semibold text-slate-950">{signal.finding}</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">{signal.reason}</p>
+                  {assistant && <p className="mt-1 text-xs font-semibold uppercase text-slate-400">{assistant.name}</p>}
                 </div>
               </div>
             );
@@ -311,77 +213,28 @@ export function RecommendationsClient() {
         </div>
       </Section>
 
-      <Surface className="mt-7">
-        <h2 className="text-lg font-semibold text-slate-950">Supplier comparison</h2>
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
-            <thead>
-              <tr className="text-xs uppercase text-slate-500">
-                {["Supplier", "Source", "Unit cost", "Delivery", "Availability", "Rating / quality", "Match", "Risk"].map((header) => (
-                  <th key={header} className="border-b border-slate-200 px-3 py-2 font-semibold">
-                    {header}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {suppliers.map((supplier) => (
-                <tr key={`${supplier.supplierName}-${supplier.source}`}>
-                  <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-950">{supplier.supplierName}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 text-slate-700">${supplier.estimatedUnitCost.toFixed(2)}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.estimatedDeliveryTime}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.availability}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.ratingQualityProxy}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.matchConfidence}</td>
-                  <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.risk}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Surface>
-
-      <Surface className="mt-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-slate-950">Evidence layer</h2>
-          <BrightDataPill />
+      <Section>
+        <div className="flex flex-wrap gap-2 border-b border-slate-200">
+          {strategyTabs.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={`min-h-11 border-b-2 px-3 py-2 text-sm font-semibold transition ${
+                activeTab === tab
+                  ? "border-teal-600 text-teal-800"
+                  : "border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-950"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
         </div>
 
-        <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4" open>
-          <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
-            Evidence and source data
-            <FileSearch size={18} />
-          </summary>
-          {evidence && (
-            <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
-              <Comparison label="Product identity" value={evidence.productIdentity} />
-              <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
-              <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
-              <Comparison label="Bright Data product" value={evidence.brightDataProduct} />
-              <Comparison label="Current price" value={`$${evidence.currentPrice.toFixed(2)}`} />
-              <Comparison label="Supplier price" value={`$${evidence.supplierPrice.toFixed(2)}`} />
-              <Comparison label="Matched attributes" value={evidence.matchedAttributes.join(", ")} />
-              <Comparison label="Demand indicators" value={evidence.demandIndicators.join(", ")} />
-              <Comparison label="Risk inputs" value={evidence.riskInputs.join(", ")} />
-              <Comparison label="Evidence package" value={evidence.evidencePackageId} />
-            </div>
-          )}
-        </details>
-
-        <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
-            Assistant reasoning and technical details
-            <ChevronRight size={18} />
-          </summary>
-          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
-            <Comparison label="Analysis run" value={analysis.analysisRunId} />
-            <Comparison label="Collection mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
-            <Comparison label="Collected at" value={new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()} />
-            <Comparison label="Status" value={analysis.status} />
-          </div>
-        </details>
-      </Surface>
+        <Surface className="mt-5">
+          <ActiveTabContent activeTab={activeTab} analysis={analysis} selected={selected} evidence={evidence} suppliers={suppliers} />
+        </Surface>
+      </Section>
 
       <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
         <div className="flex items-start gap-3">
@@ -395,53 +248,214 @@ export function RecommendationsClient() {
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function Counter({ label, value }: { label: string; value: number }) {
   return (
-    <div className="min-w-40 rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="min-w-36 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
+      <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
     </div>
   );
 }
 
-function StrategyPoint({ label, value }: { label: string; value: string }) {
-  return (
-    <DetailPanel>
-      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-2 text-sm leading-6 text-slate-700">{value}</p>
-    </DetailPanel>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-40 flex-1 border-l-2 border-slate-200 bg-white py-2 pl-4">
-      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-2 text-lg font-semibold capitalize text-slate-950">{value}</p>
-    </div>
-  );
-}
-
-function Signal({
-  label,
-  value,
-  tone
+function ActiveTabContent({
+  activeTab,
+  analysis,
+  selected,
+  evidence,
+  suppliers
 }: {
-  label: string;
-  value: string;
-  tone: "teal" | "amber" | "red" | "blue";
+  activeTab: StrategyTab;
+  analysis: AnalysisResult;
+  selected: AnalysisResult["executiveRecommendation"];
+  evidence: AnalysisResult["evidencePackages"][number] | undefined;
+  suppliers: SupplierOption[];
 }) {
-  const toneClass = {
-    teal: "border-teal-200 bg-teal-50 text-teal-900",
-    amber: "border-amber-200 bg-amber-50 text-amber-900",
-    red: "border-red-200 bg-red-50 text-red-900",
-    blue: "border-blue-200 bg-blue-50 text-blue-900"
-  }[tone];
+  if (activeTab === "Product Candidates") {
+    return (
+      <div>
+        <TabHeader
+          title="Product Candidates"
+          description="Product candidates generated from this analysis are shown as simple previews for now."
+        />
+        <div className="mt-4 flex flex-col gap-3">
+          {analysis.opportunities.length > 0 ? (
+            analysis.opportunities.map((recommendation) => (
+              <div key={recommendation.recommendationId} className="border-b border-slate-100 py-3 last:border-b-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={recommendation.riskLevel === "high" ? "red" : recommendation.riskLevel === "medium" ? "amber" : "green"}>
+                    {recommendation.riskLevel} risk
+                  </Badge>
+                  <Badge tone="blue">{recommendation.confidenceLevel} confidence</Badge>
+                </div>
+                <p className="mt-2 text-sm font-semibold text-slate-950">{recommendation.recommendedAction}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{recommendation.primaryReason}</p>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-slate-600">Product candidates generated from this analysis will appear here.</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (activeTab === "Promo Candidates") {
+    return (
+      <div>
+        <TabHeader
+          title="Promo Candidates"
+          description="Promotion candidates generated from trend, competitor, and inventory signals will appear here."
+        />
+        <p className="mt-4 text-sm leading-6 text-slate-600">
+          AMI has signal inputs for demand, competitor pressure, and market timing. Promo-specific output mapping is deferred.
+        </p>
+      </div>
+    );
+  }
+
+  if (activeTab === "Inventory Actions") {
+    const inventoryContribution = selected.assistantContributions.find((contribution) => contribution.assistantId === "inventory");
+
+    return (
+      <div>
+        <TabHeader
+          title="Inventory Actions"
+          description="Inventory actions recommended from workspace context and market signals will appear here."
+        />
+        {inventoryContribution ? (
+          <div className="mt-4 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-950">{inventoryContribution.latestContribution}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">{inventoryContribution.summary}</p>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-600">Inventory actions recommended from workspace context and market signals will appear here.</p>
+        )}
+      </div>
+    );
+  }
+
+  if (activeTab === "Supplier Comparison") {
+    return (
+      <div>
+        <TabHeader title="Supplier Comparison" description="Aggregated supplier comparison for the current analysis context." />
+        {suppliers.length > 0 ? (
+          <SupplierTable suppliers={suppliers} />
+        ) : (
+          <p className="mt-4 text-sm text-slate-600">Aggregated supplier comparison will appear here.</p>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className={`min-w-40 flex-1 rounded-lg border p-4 ${toneClass}`}>
-      <p className="text-xs font-semibold uppercase">{label}</p>
-      <p className="mt-2 text-base font-semibold capitalize">{value}</p>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabHeader
+          title="Evidence & Reasoning"
+          description="Assistant reasoning, source evidence, product match, and technical details for this analysis."
+        />
+        <BrightDataPill />
+      </div>
+
+      <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4" open>
+        <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
+          Source evidence
+          <FileSearch size={18} />
+        </summary>
+        {evidence ? (
+          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
+            <Comparison label="Product identity" value={evidence.productIdentity} />
+            <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
+            <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
+            <Comparison label="Bright Data product" value={evidence.brightDataProduct} />
+            <Comparison label="Current price" value={`$${evidence.currentPrice.toFixed(2)}`} />
+            <Comparison label="Supplier price" value={`$${evidence.supplierPrice.toFixed(2)}`} />
+            <Comparison label="Matched attributes" value={evidence.matchedAttributes.join(", ")} />
+            <Comparison label="Demand indicators" value={evidence.demandIndicators.join(", ")} />
+            <Comparison label="Risk inputs" value={evidence.riskInputs.join(", ")} />
+            <Comparison label="Evidence package" value={evidence.evidencePackageId} />
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-600">Assistant reasoning, source evidence, product match, and technical details will appear here.</p>
+        )}
+      </details>
+
+      <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
+          Assistant reasoning and technical details
+          <ChevronRight size={18} />
+        </summary>
+        <div className="mt-4 flex flex-col gap-4">
+          {selected.assistantContributions.map((contribution) => {
+            const assistant = VisibleAssistants.find((item) => item.id === contribution.assistantId);
+
+            return (
+              <div key={contribution.assistantId} className="border-b border-slate-200 pb-4 last:border-b-0 last:pb-0">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-950">{assistant?.name ?? contribution.assistantId}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge tone={assistantTone(analysis.assistantStatus?.[contribution.assistantId])}>
+                      {formatMode(analysis.assistantStatus?.[contribution.assistantId] ?? "completed")}
+                    </Badge>
+                    <Badge tone={contribution.risk === "high" ? "red" : contribution.risk === "medium" ? "amber" : "green"}>
+                      {contribution.confidence}
+                    </Badge>
+                  </div>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{contribution.summary}</p>
+                <p className="mt-2 text-sm font-semibold text-slate-800">{contribution.latestContribution}</p>
+              </div>
+            );
+          })}
+          <div className="flex flex-wrap gap-3 text-sm text-slate-700">
+            <Comparison label="Analysis run" value={analysis.analysisRunId} />
+            <Comparison label="Collection mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
+            <Comparison label="Collected at" value={new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()} />
+            <Comparison label="Status" value={analysis.status} />
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function TabHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
+      <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
+    </div>
+  );
+}
+
+function SupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+        <thead>
+          <tr className="text-xs uppercase text-slate-500">
+            {["Supplier", "Source", "Unit cost", "Delivery", "Availability", "Rating / quality", "Match", "Risk"].map((header) => (
+              <th key={header} className="border-b border-slate-200 px-3 py-2 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {suppliers.map((supplier) => (
+            <tr key={`${supplier.supplierName}-${supplier.source}`}>
+              <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-950">{supplier.supplierName}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">${supplier.estimatedUnitCost.toFixed(2)}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.estimatedDeliveryTime}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.availability}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.ratingQualityProxy}</td>
+              <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.matchConfidence}</td>
+              <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.risk}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
