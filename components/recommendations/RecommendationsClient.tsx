@@ -6,12 +6,13 @@ import {
   ChevronLeft,
   ChevronRight,
   FileSearch,
-  ShieldAlert
+  ShieldAlert,
+  X
 } from "lucide-react";
 import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
-import type { AnalysisResult, SourceMode, SupplierOption } from "@/lib/schemas/ami";
+import type { AnalysisResult, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
 
 const strategyTabs = [
@@ -67,6 +68,28 @@ type PreviewRowData = {
   confidence?: "low" | "medium" | "high";
   meta?: string;
   variant: RowDisplayVariant;
+};
+
+type DrawerDetail = {
+  rowId: string;
+  variant: RowDisplayVariant;
+  title: string;
+  summary: string;
+  category?: string;
+  marketplace?: string;
+  targetProduct?: string;
+  sourceMode: string;
+  opportunityScore?: number;
+  confidence?: string;
+  risk?: string;
+  demand?: string;
+  estimatedMargin?: number;
+  recommendedAction?: string;
+  suggestedNextStep?: string;
+  whyItMatters?: string;
+  expectedImpact?: string;
+  suppliers: SupplierOption[];
+  evidence?: EvidencePackage;
 };
 
 const inventoryTitleMaxLength = 72;
@@ -308,6 +331,135 @@ function deriveInventoryActions(analysis: AnalysisResult, selected: AnalysisResu
   return rows;
 }
 
+function resolveDrawerDetail(
+  row: PreviewRowData,
+  analysis: AnalysisResult,
+  suppliers: SupplierOption[],
+  selected: AnalysisResult["executiveRecommendation"]
+): DrawerDetail {
+  const sourceMode = formatMode(analysis.sourceCollectionStatus.mode);
+  const { category, productName, targetMarketplace } = analysis.marketContext;
+  const defaultEvidence = analysis.evidencePackages[0];
+
+  const base: DrawerDetail = {
+    rowId: row.id,
+    variant: row.variant,
+    title: row.title,
+    summary: row.summary,
+    category,
+    marketplace: targetMarketplace,
+    sourceMode,
+    confidence: row.confidence,
+    risk: row.risk,
+    suppliers,
+    evidence: defaultEvidence
+  };
+
+  if (row.id.startsWith("product-")) {
+    const recommendationId = row.id.replace("product-", "");
+    const opportunity = analysis.opportunities.find((item) => item.recommendationId === recommendationId);
+    const evidence = opportunity
+      ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+      : defaultEvidence;
+
+    return {
+      ...base,
+      title: productName,
+      opportunityScore: opportunity?.opportunityScore,
+      demand: opportunity?.demandSignal,
+      estimatedMargin: opportunity?.estimatedMargin,
+      recommendedAction: opportunity?.recommendedAction,
+      suggestedNextStep: opportunity?.suggestedNextStep,
+      whyItMatters: opportunity?.primaryReason ?? row.summary,
+      expectedImpact: opportunity ? `${opportunity.matchQuality} match · ${opportunity.signalStrength} signal` : undefined,
+      evidence
+    };
+  }
+
+  if (row.id.startsWith("promo-")) {
+    const innerId = row.id.replace("promo-", "");
+    const opportunity = analysis.opportunities.find((item) => item.recommendationId === innerId);
+
+    if (opportunity) {
+      const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId);
+
+      return {
+        ...base,
+        title: row.title,
+        targetProduct: productName,
+        opportunityScore: opportunity.opportunityScore,
+        demand: opportunity.demandSignal,
+        estimatedMargin: opportunity.estimatedMargin,
+        recommendedAction: opportunity.recommendedAction,
+        suggestedNextStep: opportunity.suggestedNextStep,
+        whyItMatters: opportunity.primaryReason,
+        expectedImpact: `${opportunity.matchQuality} match · ${opportunity.signalStrength} signal`,
+        evidence
+      };
+    }
+
+    const finding = analysis.assistantFindings.find((item) => `${item.assistantId}-${item.finding}` === innerId);
+
+    return {
+      ...base,
+      title: row.title,
+      targetProduct: productName,
+      demand: finding?.signal,
+      recommendedAction: finding?.finding ?? row.title,
+      whyItMatters: finding?.reason ?? row.summary,
+      expectedImpact: finding ? `${finding.confidence} confidence · ${finding.signal} signal` : undefined,
+      evidence: defaultEvidence
+    };
+  }
+
+  if (row.id.startsWith("inventory-")) {
+    const innerId = row.id.replace("inventory-", "");
+    const affected = category || productName;
+    const inventoryContribution = selected.assistantContributions.find((item) => item.assistantId === "inventory");
+
+    if (innerId.startsWith("finding-")) {
+      const findingText = innerId.replace("finding-", "");
+      const finding = analysis.assistantFindings.find((item) => item.assistantId === "inventory" && item.finding === findingText);
+
+      return {
+        ...base,
+        title: row.title,
+        targetProduct: affected,
+        recommendedAction: inventoryContribution?.latestContribution ?? row.title,
+        whyItMatters: finding?.reason ?? row.summary,
+        suggestedNextStep: inventoryContribution?.summary,
+        expectedImpact: finding ? `${finding.confidence} confidence` : row.confidence ? `${row.confidence} confidence` : undefined,
+        evidence: defaultEvidence
+      };
+    }
+
+    return {
+      ...base,
+      title: row.title,
+      targetProduct: affected,
+      recommendedAction: inventoryContribution?.latestContribution ?? row.title,
+      whyItMatters: row.summary,
+      suggestedNextStep: inventoryContribution?.summary,
+      expectedImpact: row.confidence ? `${row.confidence} confidence` : undefined,
+      evidence: defaultEvidence
+    };
+  }
+
+  return base;
+}
+
+function drawerTitleForVariant(variant: RowDisplayVariant) {
+  if (variant === "product") {
+    return "Product candidate detail";
+  }
+
+  if (variant === "promo") {
+    return "Promo candidate detail";
+  }
+
+  return "Inventory action detail";
+}
+
 function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
   const evidence = analysis.evidencePackages[0];
 
@@ -540,64 +692,91 @@ function ActiveTabContent({
     () => deriveInventoryActions(analysis, selected).map((row) => ({ ...row, id: `inventory-${row.id}` })),
     [analysis, selected]
   );
+  const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
+
+  const openDrawer = (row: PreviewRowData) => {
+    setDrawerDetail(resolveDrawerDetail(row, analysis, suppliers, selected));
+  };
+
+  const drawerIsSelected = drawerDetail
+    ? (activeTab === "Product Candidates" && selectedProductIds.has(drawerDetail.rowId)) ||
+      (activeTab === "Promo Candidates" && selectedPromoIds.has(drawerDetail.rowId)) ||
+      (activeTab === "Inventory Actions" && selectedInventoryIds.has(drawerDetail.rowId))
+    : false;
+
+  const drawerNode = drawerDetail ? (
+    <ItemDetailDrawer detail={drawerDetail} isSelected={drawerIsSelected} onClose={() => setDrawerDetail(null)} />
+  ) : null;
 
   if (activeTab === "Product Candidates") {
     return (
-      <SelectablePaginatedTab
-        title="Product Candidates"
-        description="Product candidates generated from this analysis."
-        rows={productRows}
-        rowLabel="product candidates"
-        selectedIds={selectedProductIds}
-        onToggle={(rowId, checked) => toggleSelection(setSelectedProductIds, rowId, checked)}
-        page={productPage}
-        onPageChange={setProductPage}
-        emptyState={
-          <LimitedDataState message="Product candidates generated from this analysis will appear here when available." />
-        }
-      />
+      <>
+        <SelectablePaginatedTab
+          title="Product Candidates"
+          description="Product candidates generated from this analysis."
+          rows={productRows}
+          rowLabel="product candidates"
+          selectedIds={selectedProductIds}
+          onToggle={(rowId, checked) => toggleSelection(setSelectedProductIds, rowId, checked)}
+          onViewDetails={openDrawer}
+          page={productPage}
+          onPageChange={setProductPage}
+          emptyState={
+            <LimitedDataState message="Product candidates generated from this analysis will appear here when available." />
+          }
+        />
+        {drawerNode}
+      </>
     );
   }
 
   if (activeTab === "Promo Candidates") {
     return (
-      <SelectablePaginatedTab
-        title="Promo Candidates"
-        description="Promotion-oriented suggestions from trend, competitor, and market timing signals in this analysis."
-        rows={promoRows}
-        rowLabel="promo candidates"
-        selectedIds={selectedPromoIds}
-        onToggle={(rowId, checked) => toggleSelection(setSelectedPromoIds, rowId, checked)}
-        page={promoPage}
-        onPageChange={setPromoPage}
-        emptyState={
-          <LimitedDataState
-            message="Promotion candidates are not available for this analysis yet."
-            detail="AMI found market signals that may support future promotion planning, but no dedicated promotion output has been generated."
-          />
-        }
-      />
+      <>
+        <SelectablePaginatedTab
+          title="Promo Candidates"
+          description="Promotion-oriented suggestions from trend, competitor, and market timing signals in this analysis."
+          rows={promoRows}
+          rowLabel="promo candidates"
+          selectedIds={selectedPromoIds}
+          onToggle={(rowId, checked) => toggleSelection(setSelectedPromoIds, rowId, checked)}
+          onViewDetails={openDrawer}
+          page={promoPage}
+          onPageChange={setPromoPage}
+          emptyState={
+            <LimitedDataState
+              message="Promotion candidates are not available for this analysis yet."
+              detail="AMI found market signals that may support future promotion planning, but no dedicated promotion output has been generated."
+            />
+          }
+        />
+        {drawerNode}
+      </>
     );
   }
 
   if (activeTab === "Inventory Actions") {
     return (
-      <SelectablePaginatedTab
-        title="Inventory Actions"
-        description="Inventory actions generated from workspace context and market signals."
-        rows={inventoryRows}
-        rowLabel="inventory actions"
-        selectedIds={selectedInventoryIds}
-        onToggle={(rowId, checked) => toggleSelection(setSelectedInventoryIds, rowId, checked)}
-        page={inventoryPage}
-        onPageChange={setInventoryPage}
-        emptyState={
-          <LimitedDataState
-            message="No dedicated inventory actions were generated for this analysis."
-            detail="AMI will show inventory actions here when workspace inventory context produces operational recommendations."
-          />
-        }
-      />
+      <>
+        <SelectablePaginatedTab
+          title="Inventory Actions"
+          description="Inventory actions generated from workspace context and market signals."
+          rows={inventoryRows}
+          rowLabel="inventory actions"
+          selectedIds={selectedInventoryIds}
+          onToggle={(rowId, checked) => toggleSelection(setSelectedInventoryIds, rowId, checked)}
+          onViewDetails={openDrawer}
+          page={inventoryPage}
+          onPageChange={setInventoryPage}
+          emptyState={
+            <LimitedDataState
+              message="No dedicated inventory actions were generated for this analysis."
+              detail="AMI will show inventory actions here when workspace inventory context produces operational recommendations."
+            />
+          }
+        />
+        {drawerNode}
+      </>
     );
   }
 
@@ -696,6 +875,7 @@ function SelectablePaginatedTab({
   rowLabel,
   selectedIds,
   onToggle,
+  onViewDetails,
   page,
   onPageChange,
   emptyState
@@ -706,6 +886,7 @@ function SelectablePaginatedTab({
   rowLabel: string;
   selectedIds: Set<string>;
   onToggle: (rowId: string, checked: boolean) => void;
+  onViewDetails: (row: PreviewRowData) => void;
   page: number;
   onPageChange: (page: number) => void;
   emptyState: ReactNode;
@@ -750,6 +931,7 @@ function SelectablePaginatedTab({
                 selectable
                 checked={selectedIds.has(row.id)}
                 onCheckedChange={(checked) => onToggle(row.id, checked)}
+                onViewDetails={() => onViewDetails(row)}
               />
             ))}
           </div>
@@ -794,7 +976,8 @@ function PreviewRow({
   variant,
   selectable = false,
   checked = false,
-  onCheckedChange
+  onCheckedChange,
+  onViewDetails
 }: {
   title: string;
   summary: string;
@@ -805,10 +988,11 @@ function PreviewRow({
   selectable?: boolean;
   checked?: boolean;
   onCheckedChange?: (checked: boolean) => void;
+  onViewDetails?: () => void;
 }) {
   if (selectable && variant) {
     return (
-      <div className="flex items-start gap-3 border-b border-slate-100 py-2 last:border-b-0">
+      <div className="flex items-start gap-2 border-b border-slate-100 py-2 last:border-b-0">
         <input
           type="checkbox"
           checked={checked}
@@ -820,7 +1004,16 @@ function PreviewRow({
           <p className="text-sm font-semibold text-slate-950">{title}</p>
           {meta && <p className="mt-0.5 text-xs text-slate-500">{meta}</p>}
         </div>
-        <div className="hidden w-16 shrink-0 sm:block" aria-hidden />
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewDetails?.();
+          }}
+          className="shrink-0 text-xs font-semibold text-teal-700 hover:text-teal-900"
+        >
+          View details
+        </button>
       </div>
     );
   }
@@ -838,6 +1031,220 @@ function PreviewRow({
   );
 
   return <div className="border-b border-slate-100 py-3 last:border-b-0">{content}</div>;
+}
+
+function ItemDetailDrawer({
+  detail,
+  isSelected,
+  onClose
+}: {
+  detail: DrawerDetail;
+  isSelected: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+
+  const marginLabel =
+    detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
+      ? `Est. margin ${detail.estimatedMargin.toFixed(1)}%`
+      : undefined;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button type="button" className="absolute inset-0 bg-slate-950/40" aria-label="Close drawer" onClick={onClose} />
+      <aside
+        className="absolute inset-0 flex flex-col bg-white md:inset-y-0 md:left-auto md:right-0 md:w-full md:max-w-lg md:border-l md:border-slate-200 md:shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="drawer-title"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 md:px-6">
+          <div className="min-w-0">
+            <h3 id="drawer-title" className="text-lg font-semibold text-slate-950">
+              {drawerTitleForVariant(detail.variant)}
+            </h3>
+            <p className="mt-1 text-sm font-semibold text-slate-800">{detail.title}</p>
+            <p className="mt-1 text-xs font-semibold uppercase text-slate-500">{isSelected ? "Selected" : "Not selected"}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-200 p-2 text-slate-700 hover:border-slate-300 hover:text-slate-950"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
+          <section>
+            <h4 className="text-sm font-semibold text-slate-950">
+              {detail.variant === "product"
+                ? "Product / action summary"
+                : detail.variant === "promo"
+                  ? "Promo / action summary"
+                  : "Inventory action summary"}
+            </h4>
+            <dl className="mt-3 flex flex-col gap-2">
+              {detail.variant === "product" && (
+                <>
+                  <DrawerField label="Product / candidate name" value={detail.title} />
+                  <DrawerField label="Category" value={detail.category} />
+                  <DrawerField label="Marketplace" value={detail.marketplace} />
+                </>
+              )}
+              {detail.variant === "promo" && (
+                <>
+                  <DrawerField label="Promo / action name" value={detail.title} />
+                  <DrawerField label="Target product or category" value={detail.targetProduct ?? detail.category} />
+                </>
+              )}
+              {detail.variant === "inventory" && (
+                <>
+                  <DrawerField label="Inventory action name" value={detail.title} />
+                  <DrawerField label="Affected product or category" value={detail.targetProduct ?? detail.category} />
+                </>
+              )}
+              <DrawerField label="Source mode" value={detail.sourceMode} />
+              <DrawerField label="Selected status" value={isSelected ? "Selected" : "Not selected"} />
+            </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Opportunity score</h4>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {detail.opportunityScore !== undefined && (
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                  Score {detail.opportunityScore}
+                </span>
+              )}
+              {detail.confidence && (
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                  Confidence {detail.confidence}
+                </span>
+              )}
+              {detail.risk && (
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">Risk {detail.risk}</span>
+              )}
+              {detail.demand && (
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">Demand {detail.demand}</span>
+              )}
+              {marginLabel && (
+                <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{marginLabel}</span>
+              )}
+            </div>
+          </section>
+
+          <details className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4" open>
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">What AMI recommends</summary>
+            <dl className="mt-4 flex flex-col gap-3">
+              <DrawerField label="Recommended action" value={detail.recommendedAction ?? detail.title} />
+              <DrawerField label="Why it matters" value={detail.whyItMatters ?? detail.summary} />
+              <DrawerField label="Expected impact" value={detail.expectedImpact} />
+              <DrawerField label="Suggested next step" value={detail.suggestedNextStep} />
+            </dl>
+          </details>
+
+          <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">Supplier detail</summary>
+            <div className="mt-4">
+              <p className="text-sm text-slate-600">Supplier options connected to this analysis</p>
+              {detail.suppliers.length > 0 ? (
+                <DrawerSupplierTable suppliers={detail.suppliers} />
+              ) : (
+                <p className="mt-3 text-sm text-slate-600">No supplier detail is available for this item yet.</p>
+              )}
+            </div>
+          </details>
+
+          <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">Evidence layer</summary>
+            <div className="mt-4">
+              {detail.evidence ? (
+                <>
+                  <div className="mb-3">
+                    <BrightDataPill />
+                  </div>
+                  <dl className="flex flex-col gap-2">
+                    <DrawerField label="Source marketplace" value={detail.evidence.sourceMarketplace} />
+                    <DrawerField label="Source mode" value={formatMode(detail.evidence.brightDataMode)} />
+                    <DrawerField label="Bright Data product" value={detail.evidence.brightDataProduct} />
+                    <DrawerField label="Current price" value={`$${detail.evidence.currentPrice.toFixed(2)}`} />
+                    <DrawerField label="Supplier price" value={`$${detail.evidence.supplierPrice.toFixed(2)}`} />
+                    <DrawerField label="Matched attributes" value={detail.evidence.matchedAttributes.join(", ")} />
+                    <DrawerField label="Demand indicators" value={detail.evidence.demandIndicators.join(", ")} />
+                    <DrawerField label="Risk inputs" value={detail.evidence.riskInputs.join(", ")} />
+                    <DrawerField label="Evidence package ID" value={detail.evidence.evidencePackageId} />
+                  </dl>
+                </>
+              ) : (
+                <p className="text-sm text-slate-600">No evidence detail is available for this item yet.</p>
+              )}
+            </div>
+          </details>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DrawerField({ label, value }: { label: string; value?: string }) {
+  if (!value) {
+    return null;
+  }
+
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
+      <dd className="mt-1 text-sm leading-6 text-slate-800">{value}</dd>
+    </div>
+  );
+}
+
+function DrawerSupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="min-w-full border-separate border-spacing-0 text-left text-xs">
+        <thead>
+          <tr className="uppercase text-slate-500">
+            {["Supplier", "Source", "Unit cost", "Delivery", "Availability", "Match", "Risk"].map((header) => (
+              <th key={header} className="border-b border-slate-200 px-2 py-2 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {suppliers.map((supplier) => (
+            <tr key={`${supplier.supplierName}-${supplier.source}`}>
+              <td className="border-b border-slate-100 px-2 py-2 font-semibold text-slate-950">{supplier.supplierName}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.source}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">${supplier.estimatedUnitCost.toFixed(2)}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.estimatedDeliveryTime}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.availability}</td>
+              <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.matchConfidence}</td>
+              <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.risk}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function LimitedDataState({ message, detail }: { message: string; detail?: string }) {
