@@ -54,6 +54,107 @@ function assistantTone(status: string | undefined): "neutral" | "green" | "amber
   return "neutral";
 }
 
+const promoKeywords = ["promo", "promotion", "monitor", "campaign", "bundle", "seasonal", "validation", "rollout"];
+
+type PreviewRowData = {
+  id: string;
+  title: string;
+  summary: string;
+  risk: "low" | "medium" | "high";
+  confidence?: "low" | "medium" | "high";
+  meta?: string;
+};
+
+function riskBadgeTone(risk: "low" | "medium" | "high") {
+  return risk === "high" ? "red" : risk === "medium" ? "amber" : "green";
+}
+
+function formatMargin(estimatedMargin: number | undefined) {
+  if (estimatedMargin === undefined || estimatedMargin <= 0) {
+    return undefined;
+  }
+
+  return `Est. margin ${estimatedMargin.toFixed(1)}%`;
+}
+
+function isPromoLikeText(text: string) {
+  const lower = text.toLowerCase();
+  return promoKeywords.some((keyword) => lower.includes(keyword));
+}
+
+function derivePromoCandidates(analysis: AnalysisResult): PreviewRowData[] {
+  const promoOpportunities = analysis.opportunities.filter(
+    (opportunity) =>
+      isPromoLikeText(opportunity.recommendedAction) || isPromoLikeText(opportunity.primaryReason)
+  );
+
+  if (promoOpportunities.length > 0) {
+    return promoOpportunities.map((opportunity) => ({
+      id: opportunity.recommendationId,
+      title: opportunity.recommendedAction,
+      summary: opportunity.primaryReason,
+      risk: opportunity.riskLevel,
+      confidence: opportunity.confidenceLevel,
+      meta: opportunity.dataFreshness
+    }));
+  }
+
+  const promoFindings = analysis.assistantFindings.filter(
+    (finding) => (finding.assistantId === "trend" || finding.assistantId === "competitor") && finding.signal !== "weak"
+  );
+
+  return promoFindings.map((finding) => ({
+    id: `${finding.assistantId}-${finding.finding}`,
+    title: finding.finding,
+    summary: finding.reason,
+    risk: finding.risk,
+    confidence: finding.confidence,
+    meta: finding.dataFreshness || finding.sourceLabel
+  }));
+}
+
+function deriveInventoryActions(analysis: AnalysisResult, selected: AnalysisResult["executiveRecommendation"]): PreviewRowData[] {
+  if (analysis.assistantStatus?.inventory === "skipped") {
+    return [];
+  }
+
+  const rows: PreviewRowData[] = [];
+  const seenTitles = new Set<string>();
+  const affectedLabel = analysis.marketContext.category || analysis.marketContext.productName;
+  const affectedMeta = affectedLabel ? `Affected: ${affectedLabel}` : undefined;
+
+  for (const finding of analysis.assistantFindings.filter((item) => item.assistantId === "inventory")) {
+    if (seenTitles.has(finding.finding)) {
+      continue;
+    }
+
+    seenTitles.add(finding.finding);
+    rows.push({
+      id: `finding-${finding.finding}`,
+      title: finding.finding,
+      summary: finding.reason,
+      risk: finding.risk,
+      confidence: finding.confidence,
+      meta: affectedMeta
+    });
+  }
+
+  const inventoryContribution = selected.assistantContributions.find((contribution) => contribution.assistantId === "inventory");
+
+  if (inventoryContribution && !seenTitles.has(inventoryContribution.latestContribution)) {
+    rows.push({
+      id: `contribution-${inventoryContribution.latestContribution}`,
+      title: inventoryContribution.latestContribution,
+      summary: inventoryContribution.summary,
+      risk: inventoryContribution.risk,
+      confidence: inventoryContribution.confidence,
+      meta: affectedMeta
+    });
+  }
+
+  return rows;
+}
+
 function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
   const evidence = analysis.evidencePackages[0];
 
@@ -270,29 +371,27 @@ function ActiveTabContent({
   evidence: AnalysisResult["evidencePackages"][number] | undefined;
   suppliers: SupplierOption[];
 }) {
+  const promoCandidates = derivePromoCandidates(analysis);
+  const inventoryActions = deriveInventoryActions(analysis, selected);
+
   if (activeTab === "Product Candidates") {
     return (
       <div>
-        <TabHeader
-          title="Product Candidates"
-          description="Product candidates generated from this analysis are shown as simple previews for now."
-        />
-        <div className="mt-4 flex flex-col gap-3">
+        <TabHeader title="Product Candidates" description="Product candidates generated from this analysis." />
+        <div className="mt-4 flex flex-col">
           {analysis.opportunities.length > 0 ? (
             analysis.opportunities.map((recommendation) => (
-              <div key={recommendation.recommendationId} className="border-b border-slate-100 py-3 last:border-b-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={recommendation.riskLevel === "high" ? "red" : recommendation.riskLevel === "medium" ? "amber" : "green"}>
-                    {recommendation.riskLevel} risk
-                  </Badge>
-                  <Badge tone="blue">{recommendation.confidenceLevel} confidence</Badge>
-                </div>
-                <p className="mt-2 text-sm font-semibold text-slate-950">{recommendation.recommendedAction}</p>
-                <p className="mt-1 text-sm leading-6 text-slate-600">{recommendation.primaryReason}</p>
-              </div>
+              <PreviewRow
+                key={recommendation.recommendationId}
+                title={recommendation.recommendedAction}
+                summary={recommendation.primaryReason}
+                risk={recommendation.riskLevel}
+                confidence={recommendation.confidenceLevel}
+                meta={formatMargin(recommendation.estimatedMargin)}
+              />
             ))
           ) : (
-            <p className="text-sm text-slate-600">Product candidates generated from this analysis will appear here.</p>
+            <LimitedDataState message="Product candidates generated from this analysis will appear here when available." />
           )}
         </div>
       </div>
@@ -304,32 +403,57 @@ function ActiveTabContent({
       <div>
         <TabHeader
           title="Promo Candidates"
-          description="Promotion candidates generated from trend, competitor, and inventory signals will appear here."
+          description="Promotion-oriented suggestions from trend, competitor, and market timing signals in this analysis."
         />
-        <p className="mt-4 text-sm leading-6 text-slate-600">
-          AMI has signal inputs for demand, competitor pressure, and market timing. Promo-specific output mapping is deferred.
-        </p>
+        <div className="mt-4 flex flex-col">
+          {promoCandidates.length > 0 ? (
+            promoCandidates.map((candidate) => (
+              <PreviewRow
+                key={candidate.id}
+                title={candidate.title}
+                summary={candidate.summary}
+                risk={candidate.risk}
+                confidence={candidate.confidence}
+                meta={candidate.meta}
+              />
+            ))
+          ) : (
+            <LimitedDataState
+              message="Promotion candidates are not available for this analysis yet."
+              detail="AMI found market signals that may support future promotion planning, but no dedicated promotion output has been generated."
+            />
+          )}
+        </div>
       </div>
     );
   }
 
   if (activeTab === "Inventory Actions") {
-    const inventoryContribution = selected.assistantContributions.find((contribution) => contribution.assistantId === "inventory");
-
     return (
       <div>
         <TabHeader
           title="Inventory Actions"
-          description="Inventory actions recommended from workspace context and market signals will appear here."
+          description="Inventory actions generated from workspace context and market signals."
         />
-        {inventoryContribution ? (
-          <div className="mt-4 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-sm font-semibold text-slate-950">{inventoryContribution.latestContribution}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-600">{inventoryContribution.summary}</p>
-          </div>
-        ) : (
-          <p className="mt-4 text-sm text-slate-600">Inventory actions recommended from workspace context and market signals will appear here.</p>
-        )}
+        <div className="mt-4 flex flex-col">
+          {inventoryActions.length > 0 ? (
+            inventoryActions.map((action) => (
+              <PreviewRow
+                key={action.id}
+                title={action.title}
+                summary={action.summary}
+                risk={action.risk}
+                confidence={action.confidence}
+                meta={action.meta}
+              />
+            ))
+          ) : (
+            <LimitedDataState
+              message="No dedicated inventory actions were generated for this analysis."
+              detail="AMI will show inventory actions here when workspace inventory context produces operational recommendations."
+            />
+          )}
+        </div>
       </div>
     );
   }
@@ -337,11 +461,14 @@ function ActiveTabContent({
   if (activeTab === "Supplier Comparison") {
     return (
       <div>
-        <TabHeader title="Supplier Comparison" description="Aggregated supplier comparison for the current analysis context." />
+        <TabHeader
+          title="Supplier Comparison"
+          description="Supplier options connected to this analysis. Aggregated selected-item coverage will be added in a later step."
+        />
         {suppliers.length > 0 ? (
           <SupplierTable suppliers={suppliers} />
         ) : (
-          <p className="mt-4 text-sm text-slate-600">Aggregated supplier comparison will appear here.</p>
+          <p className="mt-4 text-sm text-slate-600">Supplier options connected to this analysis will appear here when available.</p>
         )}
       </div>
     );
@@ -352,7 +479,7 @@ function ActiveTabContent({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <TabHeader
           title="Evidence & Reasoning"
-          description="Assistant reasoning, source evidence, product match, and technical details for this analysis."
+          description="Validation layer for this analysis, including assistant reasoning, source evidence, product matching, and technical processing details."
         />
         <BrightDataPill />
       </div>
@@ -415,6 +542,41 @@ function ActiveTabContent({
           </div>
         </div>
       </details>
+    </div>
+  );
+}
+
+function PreviewRow({
+  title,
+  summary,
+  risk,
+  confidence,
+  meta
+}: {
+  title: string;
+  summary: string;
+  risk: "low" | "medium" | "high";
+  confidence?: "low" | "medium" | "high";
+  meta?: string;
+}) {
+  return (
+    <div className="border-b border-slate-100 py-3 last:border-b-0">
+      <p className="text-sm font-semibold text-slate-950">{title}</p>
+      <p className="mt-1 text-sm leading-6 text-slate-600">{summary}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+        <Badge tone={riskBadgeTone(risk)}>{risk} risk</Badge>
+        {confidence && <Badge tone="blue">{confidence} confidence</Badge>}
+        {meta && <span className="text-slate-500">{meta}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LimitedDataState({ message, detail }: { message: string; detail?: string }) {
+  return (
+    <div className="py-3">
+      <p className="text-sm font-semibold text-slate-950">{message}</p>
+      {detail && <p className="mt-1 text-sm leading-6 text-slate-600">{detail}</p>}
     </div>
   );
 }
