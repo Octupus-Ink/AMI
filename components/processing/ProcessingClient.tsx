@@ -16,6 +16,9 @@ import {
 
 type AssistantState = "pending" | "running" | "completed" | "warning" | "failed" | "skipped" | "limited";
 
+const MIN_ORCHESTRATION_VISIBLE_MS = 3500;
+const PREPARING_REDIRECT_DELAY_MS = 650;
+
 const initialStates: Record<AssistantId, AssistantState> = {
   trend: "pending",
   competitor: "pending",
@@ -110,11 +113,13 @@ export function ProcessingClient() {
   const [sourceStatus, setSourceStatus] = useState(processingMessages[0]);
   const [sourceMode, setSourceMode] = useState<SourceMode>("demo_snapshot");
   const [message, setMessage] = useState("");
+  const [isPreparingStrategy, setIsPreparingStrategy] = useState(false);
 
   useEffect(() => {
     let isActive = true;
     const controller = new AbortController();
     const timers: number[] = [];
+    const orchestrationStartedAt = Date.now();
     abortRef.current = controller;
 
     const stored = window.localStorage.getItem("ami.marketContext");
@@ -290,16 +295,22 @@ export function ProcessingClient() {
         setProgress(100);
         setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
         setSourceStatus(result.sourceCollectionStatus?.label ?? "Source collection completed");
+        setIsPreparingStrategy(true);
         if (result.warnings?.length) {
           setMessage(result.warnings[0]);
         }
         window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
+        const visibleForMs = Date.now() - orchestrationStartedAt;
+        const redirectDelayMs =
+          visibleForMs >= MIN_ORCHESTRATION_VISIBLE_MS
+            ? PREPARING_REDIRECT_DELAY_MS
+            : MIN_ORCHESTRATION_VISIBLE_MS - visibleForMs;
         timers.push(
           window.setTimeout(() => {
             if (isActive) {
               router.push(`/recommendations?runId=${result.analysisRunId}`);
             }
-          }, 650)
+          }, redirectDelayMs)
         );
       } catch (error) {
         const isAbortError = error instanceof DOMException && error.name === "AbortError";
@@ -354,9 +365,13 @@ export function ProcessingClient() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <BrightDataPill />
-            <h1 className="mt-4 text-3xl font-semibold text-slate-950">AMI is coordinating the assistants</h1>
+            <h1 className="mt-4 text-3xl font-semibold text-slate-950">
+              {isPreparingStrategy ? "AMI is preparing strategy workspace" : "AMI is coordinating assistants"}
+            </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              AMI is reviewing the market context, resolving assistant signals, and preparing the recommendation layer.
+              {isPreparingStrategy
+                ? "AMI has completed assistant coordination and is preparing the prioritized recommendation."
+                : "AMI is reviewing the market context, resolving assistant signals, and preparing the recommendation layer."}
             </p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
