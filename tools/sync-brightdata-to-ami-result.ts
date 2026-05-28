@@ -131,6 +131,16 @@ function buildAssistantContributions() {
       risk: "medium" as const,
       dataSourcesUsed: ["Demo inventory context"],
       usageCost: 7
+    },
+    {
+      assistantId: "risk" as const,
+      summary: "Risk and confidence were reviewed against the imported marketplace evidence.",
+      latestContribution: "Flagged supplier validation and margin confirmation as the main readiness checks.",
+      signalStrength: "moderate" as const,
+      confidence: "high" as const,
+      risk: "medium" as const,
+      dataSourcesUsed: ["Bright Data opportunity scores", "AMI risk rubric"],
+      usageCost: 5
     }
   ];
 }
@@ -325,6 +335,17 @@ async function main() {
       sourceType: "inventory_context",
       sourceLabel: "Demo inventory context",
       dataFreshness: "Demo context"
+    },
+    {
+      assistantId: "risk" as const,
+      finding: "Imported opportunities are ready for review but not automatic execution.",
+      reason: "Bright Data evidence supports ranking, while supplier and margin validation remain required before action.",
+      signal: "moderate" as const,
+      confidence: "high" as const,
+      risk: "medium" as const,
+      sourceType: "risk_context",
+      sourceLabel: "AMI risk rubric",
+      dataFreshness: "Imported raw Bright Data output"
     }
   ];
 
@@ -353,6 +374,7 @@ async function main() {
       competitor: "completed" as const,
       supplier: "completed" as const,
       inventory: "completed" as const,
+      risk: "completed" as const
     },
     sourceCollectionStatus: {
       brightDataProduct: "Web Scraper API",
@@ -390,7 +412,7 @@ async function main() {
     AssistantRun.deleteMany({
       workspaceId,
       "data.sourceLabel": {
-        $in: ["Bright Data Amazon Search", "Amazon demand signals", "Supplier validation pending", "Demo inventory context"]
+        $in: ["Bright Data Amazon Search", "Amazon demand signals", "Supplier validation pending", "Demo inventory context", "AMI risk rubric"]
       }
     }),
     RawSourceSnapshot.deleteMany({ workspaceId, "data.label": "Bright Data Amazon Search raw import" })
@@ -448,6 +470,17 @@ async function main() {
       lastRun: now,
       latestContribution: "Marked supplier and inventory validation as the next operational step.",
       dataSourcesUsed: ["Demo inventory context"],
+      alertState: "normal" as const
+    },
+    {
+      assistantId: "risk" as const,
+      usageCount: 1,
+      creditLimit: 100,
+      creditsUsed: 5,
+      estimatedUsageCost: 0.5,
+      lastRun: now,
+      latestContribution: "Reviewed confidence, risk exposure, and validation readiness.",
+      dataSourcesUsed: ["Bright Data opportunity scores", "AMI risk rubric"],
       alertState: "normal" as const
     }
   ];

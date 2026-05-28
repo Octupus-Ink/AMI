@@ -18,18 +18,19 @@ Marketplace decisions are time-sensitive and often made from stale or incomplete
 
 ## Solution Overview
 
-AMI is the main advisor and coordinator. It receives the market context, coordinates four visible assistants, resolves the signals, and returns a prioritized recommendation.
+AMI is the main advisor and coordinator. It receives the market context, coordinates five visible operational assistants, resolves the signals, and returns a prioritized recommendation.
 
 - Trend Assistant: detects demand signals, social momentum, seasonality, and product trend direction.
 - Competitor Assistant: tracks competitor pricing, promotions, availability, and market pressure.
 - Supplier Assistant: evaluates sourcing feasibility, unit cost, delivery windows, and supplier risk.
 - Inventory Assistant: evaluates inventory posture, stock risk, margin context, and operational opportunity.
+- Risk Assistant: reviews confidence, risk exposure, evidence gaps, and readiness for the recommended action.
 
 ## Six Macro Screen Architecture
 
 1. Start / Access Screen: AMI intro, overview access, demo access, login, and registration.
 2. Market Context Setup Screen: product/category, target marketplace, supplier source, business goal, region/currency, and optional inventory-context use.
-3. Processing Screen: AMI status, progress, four assistant activity states, source collection status, and only back-to-setup action.
+3. Processing Screen: AMI status, progress, five assistant activity states, source collection status, and only back-to-setup action.
 4. AMI Recommendations Screen: executive recommendation, opportunity ranking, assistant contribution summary, comparison, evidence drawer, and save/approve/export actions.
 5. Assistant Overview Screen: assistant usage, credit limits, 90% alert, exceeded-limit warning, last run, latest contribution, sources, usage count, and estimated usage cost.
 6. Account / Workspace Screen: user profile, marketplace profile, saved reports, historical recommendations, inventory context, sync status, approved recommendation history, demo payment simulator, and credit management.

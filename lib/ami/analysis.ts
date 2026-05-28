@@ -107,6 +107,16 @@ function assistantContributions(mode: SourceMode, product: string, inventoryCont
         ? [inventoryContext.sourceLabel ?? "Workspace inventory context", "Supplier margin snapshot"]
         : ["Inventory Assistant skipped", "Trend, competitor, and supplier signals"],
       usageCost: usesInventory ? 0.7 : 0
+    },
+    {
+      assistantId: "risk",
+      summary: "Reviewed confidence, risk exposure, evidence gaps, and validation readiness.",
+      latestContribution: "Confirmed the recommendation should remain a controlled validation step before scaling.",
+      signalStrength: "moderate",
+      confidence: "high",
+      risk: "medium",
+      dataSourcesUsed: ["Assistant evidence summary", "Risk and confidence rubric"],
+      usageCost: 0.5
     }
   ];
 }
@@ -176,6 +186,17 @@ function assistantFindings(
       dataFreshness: usesInventory
         ? "Last inventory analysis timestamp is available in Account / Workspace"
         : "No inventory sync was used for this run"
+    },
+    {
+      assistantId: "risk",
+      finding: "Risk is manageable if the action remains scoped to validation.",
+      reason: "The available evidence supports a decision, but supplier delivery terms and market response should be confirmed before scaling.",
+      signal: "moderate",
+      confidence: "high",
+      risk: "medium",
+      sourceType: "AMI evidence synthesis",
+      sourceLabel: "Risk and confidence rubric",
+      dataFreshness
     }
   ].map((finding) => AssistantFindingSchema.parse(finding));
 }
@@ -318,6 +339,7 @@ export async function runAmiAnalysis(
           : inventoryContext.warningMessage
             ? "warning"
             : "skipped",
+      risk: "completed"
     },
     sourceCollectionStatus: {
       brightDataProduct: mode === "live" ? scrapeResult.product : "Web Scraper API / SERP API",

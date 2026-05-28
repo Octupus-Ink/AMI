@@ -846,6 +846,7 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
     competitor: 8,
     supplier: 9,
     inventory: 7,
+    risk: 5
   };
 
   if (await databaseReady()) {

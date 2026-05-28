@@ -20,21 +20,24 @@ const initialStates: Record<AssistantId, AssistantState> = {
   trend: "pending",
   competitor: "pending",
   supplier: "pending",
-  inventory: "pending"
+  inventory: "pending",
+  risk: "pending"
 };
 
 const latestActivity: Record<AssistantId, string> = {
   trend: "Waiting to review demand and social momentum signals.",
   competitor: "Waiting to compare pricing, availability, and market pressure.",
   supplier: "Waiting to compare supplier cost, delivery, and sourcing risk.",
-  inventory: "Waiting to evaluate stock posture and operational context."
+  inventory: "Waiting to evaluate stock posture and operational context.",
+  risk: "Waiting to review confidence, evidence gaps, and action readiness."
 };
 
 const sourceTypes: Record<AssistantId, string> = {
   trend: "Public market and social signals",
   competitor: "Marketplace comparison",
   supplier: "Supplier catalog snapshot",
-  inventory: "Workspace inventory context"
+  inventory: "Workspace inventory context",
+  risk: "Assistant evidence synthesis"
 };
 
 const processingMessages = [
@@ -87,7 +90,8 @@ function failedStartStates(message: string): Record<AssistantId, AssistantState>
     trend: inventoryIssue ? "skipped" : "failed",
     competitor: inventoryIssue ? "skipped" : "failed",
     supplier: inventoryIssue ? "skipped" : "failed",
-    inventory: inventoryIssue ? "warning" : "failed"
+    inventory: inventoryIssue ? "warning" : "failed",
+    risk: inventoryIssue ? "skipped" : "failed"
   };
 }
 
@@ -195,13 +199,15 @@ export function ProcessingClient() {
         setAssistantStates((current) => ({
           ...current,
           supplier: "completed",
-          inventory: inventoryCanBeLimited ? "limited" : "running"
+          inventory: inventoryCanBeLimited ? "limited" : "running",
+          risk: "running"
         }));
         setActivity((current) => ({
           ...current,
           inventory: inventoryCanBeLimited
             ? "Using demo context because connected inventory is not required for this goal."
-            : "Checking stock posture, margin context, and operational risk."
+            : "Checking stock posture, margin context, and operational risk.",
+          risk: "Reviewing confidence level, risk exposure, and evidence completeness."
         }));
         setSourceStatus(processingMessages[3]);
       }, 1950),
@@ -268,7 +274,8 @@ export function ProcessingClient() {
           trend: assistantStateFromResult(result.assistantStatus?.trend),
           competitor: assistantStateFromResult(result.assistantStatus?.competitor),
           supplier: assistantStateFromResult(result.assistantStatus?.supplier),
-          inventory: inventoryCanBeLimited && inventoryState === "skipped" ? "limited" : inventoryState
+          inventory: inventoryCanBeLimited && inventoryState === "skipped" ? "limited" : inventoryState,
+          risk: assistantStateFromResult(result.assistantStatus?.risk)
         });
         setActivity((current) => ({
           ...current,
@@ -277,7 +284,8 @@ export function ProcessingClient() {
               ? "Inventory context was requested but unavailable, so AMI continued without it."
               : inventoryState === "skipped"
                 ? "Inventory Assistant was skipped for this optional inventory run."
-                : "Inventory context resolved for this recommendation."
+                : "Inventory context resolved for this recommendation.",
+          risk: "Risk and confidence review completed for the recommendation."
         }));
         setProgress(100);
         setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
@@ -373,31 +381,35 @@ export function ProcessingClient() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-4">
+        <div className="mt-5 flex flex-col gap-3">
           {VisibleAssistants.map((assistant) => {
             const state = assistantStates[assistant.id];
 
             return (
-              <div key={assistant.id} className="rounded-lg border border-slate-200 bg-white p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold text-slate-950">{assistant.name}</p>
-                  {state === "completed" ? (
-                    <CheckCircle2 className="text-emerald-600" size={20} />
-                  ) : state === "warning" || state === "failed" ? (
-                    <ShieldAlert className="text-amber-600" size={20} />
-                  ) : (
-                    <CircleDashed className="text-teal-700" size={20} />
-                  )}
+              <div key={assistant.id} className="flex flex-col gap-3 border-b border-slate-200 py-4 last:border-b-0 sm:flex-row sm:items-start">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <span className="mt-0.5">
+                    {state === "completed" ? (
+                      <CheckCircle2 className="text-emerald-600" size={20} />
+                    ) : state === "warning" || state === "failed" ? (
+                      <ShieldAlert className="text-amber-600" size={20} />
+                    ) : (
+                      <CircleDashed className="text-teal-700" size={20} />
+                    )}
+                  </span>
+                  <div>
+                    <p className="font-semibold text-slate-950">{assistant.name}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{assistant.role}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{activity[assistant.id]}</p>
+                  </div>
                 </div>
-                <p className="mt-2 min-h-20 text-sm leading-6 text-slate-600">{assistant.role}</p>
-                <div className="mt-4 flex items-center gap-2 text-sm font-semibold capitalize text-slate-700">
-                  <StatusDot tone={dotTone(state)} />
-                  {state}
+                <div className="flex min-w-48 flex-wrap items-center gap-3 sm:justify-end">
+                  <span className="inline-flex items-center gap-2 text-sm font-semibold capitalize text-slate-700">
+                    <StatusDot tone={dotTone(state)} />
+                    {state}
+                  </span>
+                  <span className="text-xs font-semibold uppercase text-slate-500">{sourceTypes[assistant.id]}</span>
                 </div>
-                <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Latest activity</p>
-                <p className="mt-1 text-sm leading-6 text-slate-700">{activity[assistant.id]}</p>
-                <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Source type used</p>
-                <p className="mt-1 text-sm text-slate-700">{sourceTypes[assistant.id]}</p>
               </div>
             );
           })}
