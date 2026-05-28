@@ -80,6 +80,17 @@ export const demoAssistantUsage: AssistantUsage[] = [
     latestContribution: "Reviewed stock posture, margin context, and sourcing risk.",
     dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
     alertState: "near_limit"
+  },
+  {
+    assistantId: "risk",
+    usageCount: 7,
+    creditLimit: 100,
+    creditsUsed: 44,
+    estimatedUsageCost: 4.4,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Reviewed confidence, risk exposure, and validation readiness.",
+    dataSourcesUsed: ["Assistant evidence summary", "Risk and confidence rubric"],
+    alertState: "normal"
   }
 ];
 

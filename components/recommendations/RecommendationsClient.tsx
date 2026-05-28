@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   Sparkles
 } from "lucide-react";
+import { DecisionSurface, DetailPanel, PageHeader, PageShell, Section, SectionHeader, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
 import type { AnalysisResult, SourceMode, SupplierOption } from "@/lib/schemas/ami";
@@ -146,12 +147,9 @@ export function RecommendationsClient() {
 
   if (!analysis || !selected) {
     return (
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-        <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <Badge tone="teal">AMI Strategy</Badge>
-          <h1 className="mt-4 text-3xl font-semibold text-slate-950">Preparing strategy workspace</h1>
-        </section>
-      </main>
+      <PageShell className="max-w-6xl">
+        <PageHeader eyebrow={<Badge tone="teal">AMI Strategy</Badge>} title="Preparing strategy workspace" />
+      </PageShell>
     );
   }
 
@@ -163,23 +161,19 @@ export function RecommendationsClient() {
       : "Validate demand, sourcing fit, and operational risk before committing budget.";
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <Badge tone="teal">AMI Strategy</Badge>
-            <h1 className="mt-4 text-3xl font-semibold text-slate-950">Review the prioritized recommendation</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Review the prioritized recommendation, assistant reasoning, evidence, and next action.
-            </p>
-          </div>
-          <div className="grid gap-2 text-sm sm:grid-cols-3">
+    <PageShell>
+      <PageHeader
+        eyebrow={<Badge tone="teal">AMI Strategy</Badge>}
+        title="Review the prioritized recommendation"
+        description="Decision clarity first, then supporting signals, assistant reasoning, and evidence."
+        actions={
+          <div className="flex max-w-xl flex-wrap gap-2 text-sm">
             <Meta label="Business goal" value={goalLabel(analysis.marketContext.businessGoal)} />
             <Meta label="Last analysis" value={analysis.completedAt ? new Date(analysis.completedAt).toLocaleString() : "Pending"} />
             <Meta label="Source mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
           </div>
-        </div>
-      </section>
+        }
+      />
 
       {analysis.warnings?.length > 0 && (
         <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -190,14 +184,14 @@ export function RecommendationsClient() {
         </section>
       )}
 
-      <section className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <Section className="flex flex-col gap-5 lg:flex-row lg:items-start">
+        <DecisionSurface className="min-w-0 flex-1">
           <div className="flex items-start gap-3">
             <Sparkles className="mt-1 shrink-0 text-teal-800" size={22} />
             <div>
               <p className="text-xs font-semibold uppercase text-slate-500">Recommended action</p>
               <h2 className="mt-2 text-2xl font-semibold text-slate-950">{selected.recommendedAction}</h2>
-              <div className="mt-5 grid gap-4">
+              <div className="mt-5 flex flex-col gap-4">
                 <StrategyPoint label="Why it matters" value={selected.primaryReason} />
                 <StrategyPoint label="Expected business impact" value={expectedImpact} />
                 <StrategyPoint label="Suggested next step" value={selected.suggestedNextStep} />
@@ -205,7 +199,7 @@ export function RecommendationsClient() {
             </div>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-6 flex flex-wrap gap-3">
             <Signal label="Confidence" value={selected.confidenceLevel} tone="blue" />
             <Signal label="Risk" value={selected.riskLevel} tone={selected.riskLevel === "high" ? "red" : "amber"} />
             <Signal label="Data freshness" value={selected.dataFreshness} tone="teal" />
@@ -247,9 +241,9 @@ export function RecommendationsClient() {
           </div>
 
           {message && <p className="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">{message}</p>}
-        </div>
+        </DecisionSurface>
 
-        <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <aside className="w-full border-t border-slate-200 pt-5 lg:w-96 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
           <div className="flex items-center gap-2">
             <BarChart3 className="text-teal-700" size={20} />
             <h2 className="text-lg font-semibold text-slate-950">Opportunity ranking</h2>
@@ -276,27 +270,30 @@ export function RecommendationsClient() {
             ))}
           </div>
         </aside>
-      </section>
+      </Section>
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <Section className="flex flex-wrap gap-3">
         <Metric label="Opportunity score" value={`${selected.opportunityScore}/100`} />
         <Metric label="Confidence" value={selected.confidenceLevel} />
         <Metric label="Risk level" value={selected.riskLevel} />
         <Metric label="Estimated margin" value={`${selected.estimatedMargin.toFixed(1)}%`} />
         <Metric label="Demand signal" value={selected.demandSignal} />
         <Metric label="Data freshness" value={selected.dataFreshness} />
-      </section>
+      </Section>
 
-      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-950">Assistant contribution summary</h2>
-        <div className="mt-4 grid gap-3 lg:grid-cols-4">
+      <Section className="border-t border-slate-200 pt-6">
+        <SectionHeader title="Assistant contribution summary" description="Five operational roles summarized as compact decision support." />
+        <div className="flex flex-col gap-3">
           {selected.assistantContributions.map((contribution) => {
             const assistant = VisibleAssistants.find((item) => item.id === contribution.assistantId);
 
             return (
-              <div key={contribution.assistantId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center justify-between gap-3">
+              <div key={contribution.assistantId} className="flex flex-col gap-3 border-b border-slate-200 py-4 last:border-b-0 lg:flex-row lg:items-start">
+                <div className="min-w-56">
                   <p className="font-semibold text-slate-950">{assistant?.name}</p>
+                  <p className="mt-1 text-xs font-semibold uppercase text-slate-500">{assistant?.role}</p>
+                </div>
+                <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap justify-end gap-2">
                     <Badge tone={assistantTone(analysis.assistantStatus?.[contribution.assistantId])}>
                       {formatMode(analysis.assistantStatus?.[contribution.assistantId] ?? "completed")}
@@ -305,16 +302,16 @@ export function RecommendationsClient() {
                       {contribution.confidence}
                     </Badge>
                   </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{contribution.summary}</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-800">{contribution.latestContribution}</p>
                 </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{contribution.summary}</p>
-                <p className="mt-2 text-sm font-semibold text-slate-800">{contribution.latestContribution}</p>
               </div>
             );
           })}
         </div>
-      </section>
+      </Section>
 
-      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <Surface className="mt-7">
         <h2 className="text-lg font-semibold text-slate-950">Supplier comparison</h2>
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
@@ -343,9 +340,9 @@ export function RecommendationsClient() {
             </tbody>
           </table>
         </div>
-      </section>
+      </Surface>
 
-      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <Surface className="mt-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-slate-950">Evidence layer</h2>
           <BrightDataPill />
@@ -357,7 +354,7 @@ export function RecommendationsClient() {
             <FileSearch size={18} />
           </summary>
           {evidence && (
-            <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
+            <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
               <Comparison label="Product identity" value={evidence.productIdentity} />
               <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
               <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
@@ -377,14 +374,14 @@ export function RecommendationsClient() {
             Assistant reasoning and technical details
             <ChevronRight size={18} />
           </summary>
-          <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
+          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
             <Comparison label="Analysis run" value={analysis.analysisRunId} />
             <Comparison label="Collection mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
             <Comparison label="Collected at" value={new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()} />
             <Comparison label="Status" value={analysis.status} />
           </div>
         </details>
-      </section>
+      </Surface>
 
       <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
         <div className="flex items-start gap-3">
@@ -394,13 +391,13 @@ export function RecommendationsClient() {
           </p>
         </div>
       </section>
-    </main>
+    </PageShell>
   );
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="min-w-40 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
     </div>
@@ -409,16 +406,16 @@ function Meta({ label, value }: { label: string; value: string }) {
 
 function StrategyPoint({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <DetailPanel>
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-2 text-sm leading-6 text-slate-700">{value}</p>
-    </div>
+    </DetailPanel>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="min-w-40 flex-1 border-l-2 border-slate-200 bg-white py-2 pl-4">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-2 text-lg font-semibold capitalize text-slate-950">{value}</p>
     </div>
@@ -442,7 +439,7 @@ function Signal({
   }[tone];
 
   return (
-    <div className={`rounded-lg border p-4 ${toneClass}`}>
+    <div className={`min-w-40 flex-1 rounded-lg border p-4 ${toneClass}`}>
       <p className="text-xs font-semibold uppercase">{label}</p>
       <p className="mt-2 text-base font-semibold capitalize">{value}</p>
     </div>
@@ -451,7 +448,7 @@ function Signal({
 
 function Comparison({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="min-w-56 flex-1 rounded-lg border border-slate-200 bg-white p-4">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-2 break-words text-sm font-semibold text-slate-900">{value}</p>
     </div>

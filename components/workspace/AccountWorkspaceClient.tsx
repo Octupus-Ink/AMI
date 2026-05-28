@@ -15,6 +15,7 @@ import {
   UserRound,
   WalletCards
 } from "lucide-react";
+import { PageHeader, PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { Badge } from "@/components/ui/Badge";
 import type { InventoryConnectionType, InventorySourceStatus, Recommendation } from "@/lib/schemas/ami";
 
@@ -414,13 +415,12 @@ export function AccountWorkspaceClient() {
   const visibleLastSyncAt = selectedDiffersFromSaved ? null : inventoryStatus?.lastSyncAt;
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <Badge tone="teal">Control Hub</Badge>
-        <h1 className="mt-4 text-3xl font-semibold text-slate-950">Control Hub</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Manage workspace context, linked services, inventory source, recommendation history, and demo credits.
-        </p>
+    <PageShell>
+      <PageHeader
+        eyebrow={<Badge tone="teal">Control Hub</Badge>}
+        title="Control Hub"
+        description="Manage workspace context, linked services, inventory source, recommendation history, and demo credits."
+      >
 
         {message && (
           <p
@@ -431,13 +431,13 @@ export function AccountWorkspaceClient() {
             {message}
           </p>
         )}
-      </section>
+      </PageHeader>
 
       <details className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" open>
         <summary className="text-lg font-semibold text-slate-950">Personal Information</summary>
-        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div className="mt-5 flex flex-wrap gap-5">
           <Panel icon={<UserRound size={20} />} title="User profile">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="flex flex-wrap gap-3">
               <Fact label="Name" value={snapshot.user?.name ?? "Not loaded"} />
               <Fact label="Email" value={snapshot.user?.email ?? "Not loaded"} />
               <Fact label="Workspace role" value="Workspace operator" />
@@ -445,7 +445,7 @@ export function AccountWorkspaceClient() {
           </Panel>
 
           <Panel icon={<LinkIcon size={20} />} title="Linked services">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="flex flex-wrap gap-3">
               <Fact label="Bright Data status" value={formatStatus(snapshot.linkedServices?.brightDataStatus)} />
               <Fact label="Connection mode" value={snapshot.linkedServices?.connectionMode ?? "Demo fallback"} />
               <Fact
@@ -464,7 +464,7 @@ export function AccountWorkspaceClient() {
               Real payment processing is not active in this MVP. These fields are shown as a future-ready payment setup
               mockup. Demo credits are used to simulate assistant usage.
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-4 flex flex-wrap gap-3">
               <Fact label="Cardholder name" value={payment.cardholderName} />
               <Fact label="Card brand" value={payment.cardBrand} />
               <Fact label="Last 4 digits" value={payment.last4} />
@@ -494,7 +494,7 @@ export function AccountWorkspaceClient() {
               </button>
             </div>
             {showPaymentMock && (
-              <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+              <div className="mt-4 flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <DisabledField label="Cardholder name" value={payment.cardholderName} />
                 <DisabledField label="Card brand" value={payment.cardBrand} />
                 <DisabledField label="Last 4 digits" value={payment.last4} />
@@ -504,7 +504,7 @@ export function AccountWorkspaceClient() {
           </Panel>
 
           <Panel icon={<WalletCards size={20} />} title="Demo credits">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-wrap gap-3">
               <Fact label="Available demo credits" value={`${availableCredits} credits`} />
               <Fact label="Credits used" value={`${creditsUsed} / ${monthlyLimit}`} />
               <Fact label="Monthly demo limit" value={`${monthlyLimit} credits`} />
@@ -516,9 +516,9 @@ export function AccountWorkspaceClient() {
 
       <details id="marketplace-setup" className="mt-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm" open>
         <summary className="text-lg font-semibold text-slate-950">Marketplace Setup</summary>
-        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div className="mt-5 flex flex-wrap gap-5">
           <Panel icon={<BriefcaseBusiness size={20} />} title="Marketplace profile">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-wrap gap-3">
               <Fact label="Workspace name" value={String(workspace.workspaceName ?? workspace.name ?? "AMI Workspace")} />
               <Fact label="Workspace type" value={String(workspace.workspaceType ?? "Marketplace operator")} />
               <Fact label="Business name" value={String(profile.businessName ?? "Marketplace business")} />
@@ -557,8 +557,8 @@ export function AccountWorkspaceClient() {
               )}
             </div>
 
-            <form onSubmit={connectInventory} className="mt-4 grid gap-4">
-              <div className="grid gap-4 sm:grid-cols-2">
+            <form onSubmit={connectInventory} className="mt-4 flex flex-col gap-4">
+              <div className="flex flex-wrap gap-4">
                 <Field
                   label="Marketplace name"
                   value={inventory.marketplaceName}
@@ -718,7 +718,8 @@ export function AccountWorkspaceClient() {
         </div>
       </details>
 
-      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <Section>
+        <Surface className="p-4">
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-1 text-teal-700" size={20} />
           <p className="text-sm leading-6 text-slate-700">
@@ -726,14 +727,15 @@ export function AccountWorkspaceClient() {
             processing is not active, and the system must not store full card numbers, CVV, or sensitive billing credentials.
           </p>
         </div>
-      </section>
-    </main>
+        </Surface>
+      </Section>
+    </PageShell>
   );
 }
 
 function Panel({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="min-w-80 flex-1 border-t border-slate-200 pt-5">
       <div className="mb-4 flex items-center gap-2 text-slate-950">
         <span className="text-teal-700">{icon}</span>
         <h2 className="text-lg font-semibold">{title}</h2>
@@ -745,7 +747,7 @@ function Panel({ icon, title, children }: { icon: React.ReactNode; title: string
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div className="min-w-44 flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-2 break-words text-sm font-semibold text-slate-950">{value}</p>
     </div>
@@ -754,7 +756,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 function DisabledField({ label, value }: { label: string; value: string }) {
   return (
-    <label className="block">
+    <label className="block min-w-56 flex-1">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
         disabled
@@ -777,7 +779,7 @@ function Field({
   required?: boolean;
 }) {
   return (
-    <label className="block">
+    <label className="block min-w-56 flex-1">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
         required={required}

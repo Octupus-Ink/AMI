@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Gauge, Save, WalletCards } from "lucide-react";
+import { PageHeader, PageShell, Surface } from "@/components/layout/PagePrimitives";
 import { Badge } from "@/components/ui/Badge";
 import type { AssistantUsage } from "@/lib/schemas/ami";
 import { VisibleAssistants } from "@/lib/schemas/ami";
@@ -57,15 +58,15 @@ export function AssistantOverviewClient() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <Badge tone="teal">Assistants</Badge>
-        <h1 className="mt-4 text-3xl font-semibold text-slate-950">Assistants</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-          Monitor assistant usage, credit limits, source activity, and threshold states.
-        </p>
+    <PageShell>
+      <PageHeader
+        eyebrow={<Badge tone="teal">Assistants</Badge>}
+        title="Assistants"
+        description="Monitor five operational agents, credit limits, source activity, and threshold states."
+      />
 
-        <div className="mt-6 grid gap-5 lg:grid-cols-2 xl:grid-cols-4">
+      <Surface className="mt-7">
+        <div className="flex flex-col">
           {orderedUsage.map(({ assistant, usage: item }) => {
             const usageItem =
               item ??
@@ -83,13 +84,17 @@ export function AssistantOverviewClient() {
             const percent = Math.min(125, Math.round((usageItem.creditsUsed / usageItem.creditLimit) * 100));
 
             return (
-              <div key={assistant.id} className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
+              <section key={assistant.id} className="border-b border-slate-200 py-5 first:pt-0 last:border-b-0 last:pb-0">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+                  <div className="min-w-0 flex-1">
                     <h2 className="text-lg font-semibold text-slate-950">{assistant.name}</h2>
-                    <p className="mt-2 min-h-20 text-sm leading-6 text-slate-600">{assistant.role}</p>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{assistant.role}</p>
+                    <p className="mt-3 text-sm font-semibold text-slate-800">{usageItem.latestContribution}</p>
+                    <p className="mt-2 text-xs font-semibold uppercase text-slate-500">{usageItem.dataSourcesUsed.join(", ")}</p>
                   </div>
-                  <Badge tone={usageItem.alertState === "exceeded" || usageItem.alertState === "paused" ? "red" : usageItem.alertState === "near_limit" ? "amber" : "green"}>
+
+                  <div className="flex flex-wrap items-center gap-3 xl:w-[34rem]">
+                    <Badge tone={usageItem.alertState === "exceeded" || usageItem.alertState === "paused" ? "red" : usageItem.alertState === "near_limit" ? "amber" : "green"}>
                     {usageItem.alertState === "near_limit"
                       ? "Near limit"
                       : usageItem.alertState === "exceeded"
@@ -97,51 +102,37 @@ export function AssistantOverviewClient() {
                         : usageItem.alertState === "paused"
                           ? "Paused"
                           : "Normal"}
-                  </Badge>
-                </div>
-
-                <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
-                  <div className="mb-2 flex items-center justify-between text-sm">
-                    <span className="font-semibold text-slate-700">Credit limit</span>
-                    <span className="font-semibold text-slate-950">
-                      {usageItem.creditsUsed}/{usageItem.creditLimit}
-                    </span>
+                    </Badge>
+                    <UsageFact icon={<Gauge size={17} />} label="Runs" value={String(usageItem.usageCount)} />
+                    <UsageFact icon={<WalletCards size={17} />} label="Cost" value={`${usageItem.estimatedUsageCost.toFixed(2)} credits`} />
+                    <div className="min-w-48 flex-1">
+                      <div className="mb-2 flex items-center justify-between text-sm">
+                        <span className="font-semibold text-slate-700">Credit limit</span>
+                        <span className="font-semibold text-slate-950">
+                          {usageItem.creditsUsed}/{usageItem.creditLimit}
+                        </span>
+                      </div>
+                      <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={`h-full rounded-full ${
+                            usageItem.alertState === "exceeded" || usageItem.alertState === "paused"
+                              ? "bg-red-600"
+                              : usageItem.alertState === "near_limit"
+                                ? "bg-amber-500"
+                                : "bg-teal-600"
+                          }`}
+                          style={{ width: `${Math.min(100, percent)}%` }}
+                        />
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500">
+                        {usageItem.lastRun ? new Date(usageItem.lastRun).toLocaleString() : "No completed run"}
+                      </p>
+                    </div>
                   </div>
-                  <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className={`h-full rounded-full ${
-                        usageItem.alertState === "exceeded" || usageItem.alertState === "paused"
-                          ? "bg-red-600"
-                          : usageItem.alertState === "near_limit"
-                            ? "bg-amber-500"
-                            : "bg-teal-600"
-                      }`}
-                      style={{ width: `${Math.min(100, percent)}%` }}
-                    />
-                  </div>
-                  <p className="mt-3 text-sm text-slate-600">{thresholdCopy[usageItem.alertState]}</p>
-                </div>
-
-                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                  <UsageFact icon={<Gauge size={17} />} label="Usage count" value={String(usageItem.usageCount)} />
-                  <UsageFact icon={<WalletCards size={17} />} label="Estimated cost" value={`${usageItem.estimatedUsageCost.toFixed(2)} credits`} />
-                </div>
-
-                <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-                  <p className="text-xs font-semibold uppercase text-slate-500">Status</p>
-                  <p className="mt-2 text-sm font-semibold capitalize text-slate-950">{usageItem.alertState.replace("_", " ")}</p>
-                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Latest run</p>
-                  <p className="mt-2 text-sm text-slate-700">
-                    {usageItem.lastRun ? new Date(usageItem.lastRun).toLocaleString() : "No completed run"}
-                  </p>
-                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Latest contribution</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-700">{usageItem.latestContribution}</p>
-                  <p className="mt-3 text-xs font-semibold uppercase text-slate-500">Data sources used</p>
-                  <p className="mt-2 text-sm text-slate-700">{usageItem.dataSourcesUsed.join(", ")}</p>
                 </div>
 
                 <form
-                  className="mt-4 flex gap-2"
+                  className="mt-4 flex max-w-sm gap-2"
                   onSubmit={(event) => {
                     event.preventDefault();
                     const formData = new FormData(event.currentTarget);
@@ -172,20 +163,20 @@ export function AssistantOverviewClient() {
                     <span>{thresholdCopy[usageItem.alertState]}</span>
                   </div>
                 )}
-              </div>
+              </section>
             );
           })}
         </div>
 
         {message && <p className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">{message}</p>}
-      </section>
-    </main>
+      </Surface>
+    </PageShell>
   );
 }
 
 function UsageFact({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="min-w-28 border-l border-slate-200 pl-3">
       <div className="flex items-center gap-2 text-slate-500">
         {icon}
         <span className="text-xs font-semibold uppercase">{label}</span>

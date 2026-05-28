@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BarChart3, BriefcaseBusiness, CreditCard, LogOut, Menu, Settings2 } from "lucide-react";
+import { BrightDataPill } from "@/components/ui/BrightDataPill";
 
 const internalNavigation = [
   { href: "/market-context-setup", label: "Briefing", icon: Settings2 },
@@ -24,39 +25,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     router.push("/");
   }
 
+  if (isPublicHome) {
+    return (
+      <div className="min-h-screen">
+        <HomeTopNav />
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/88 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <Link href={isPublicHome ? "/" : "/market-context-setup"} className="flex items-center gap-3">
+          <Link href="/market-context-setup" className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-sm font-bold text-white">
               AMI
             </div>
-            {!isPublicHome && (
-              <div className="hidden sm:block">
-                <p className="text-sm font-semibold text-slate-950">Autonomous Marketplace Intelligence</p>
-                <p className="text-xs text-slate-500">Decision-first marketplace workspace</p>
-              </div>
-            )}
+            <div className="hidden sm:block">
+              <p className="text-sm font-semibold text-slate-950">Autonomous Marketplace Intelligence</p>
+              <p className="text-xs text-slate-500">Decision-first marketplace workspace</p>
+            </div>
           </Link>
 
-          {isPublicHome ? (
-            <nav className="flex items-center gap-2 sm:gap-4">
-              <a href="#how-it-works" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
-                How it works?
-              </a>
-              <a href="#pricing" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
-                Pricing
-              </a>
-              <a
-                href="#new-workspace"
-                className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-              >
-                New Workspace
-              </a>
-            </nav>
-          ) : (
-            <>
+          <>
               <nav className="hidden items-center gap-2 lg:flex">
                 {internalNavigation.map((item) => {
                   const Icon = item.icon;
@@ -114,10 +106,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               </details>
             </>
-          )}
         </div>
       </header>
       {children}
     </div>
+  );
+}
+
+function HomeTopNav() {
+  return (
+    <header className="h-[72px] border-b border-slate-200 bg-white/88 backdrop-blur">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 min-[1024px]:max-[1365px]:px-8 min-[1366px]:px-0">
+        <BrightDataPill />
+
+        <nav className="flex items-center gap-2 sm:gap-4">
+          <a href="#how-it-works" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
+            How it works?
+          </a>
+          <a href="#pricing" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
+            Pricing
+          </a>
+          <a
+            href="#new-workspace"
+            className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100"
+          >
+            New Workspace
+          </a>
+        </nav>
+      </div>
+    </header>
   );
 }

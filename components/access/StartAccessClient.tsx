@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole, Play, UserPlus } from "lucide-react";
-import { BrightDataPill } from "@/components/ui/BrightDataPill";
 
 type PanelMode = "login" | "register";
 
@@ -126,25 +125,22 @@ export function StartAccessClient() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-lg border border-slate-200 bg-white/92 p-6 shadow-sm">
+    <main className="flex min-h-[calc(100vh-72px)] items-center px-4 sm:px-6 lg:px-8">
+      <section className="mx-auto flex min-h-[65vh] w-full max-w-7xl flex-col items-start justify-center gap-10 py-10 lg:flex-row lg:gap-16">
+        <div className="flex min-w-0 flex-1 flex-col justify-center items-flex-start">
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-950 text-base font-bold text-white">
             AMI
-          </div>
-          <div className="mt-5">
-            <BrightDataPill />
           </div>
           <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight text-slate-950 sm:text-5xl">
             Autonomous Marketplace Intelligence
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
-            AMI reviews marketplace context, coordinates specialized assistants, and returns a ranked business
+            AMI reviews marketplace context, social trends, inventory status, coordinates specialized assistants, and returns a ranked business
             recommendation with confidence, risk, evidence, and a suggested next step.
           </p>
         </div>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="w-full shrink-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm lg:max-w-md">
           {mode === "login" ? (
             <form onSubmit={submitLogin} className="space-y-4">
               <div>
@@ -185,8 +181,10 @@ export function StartAccessClient() {
               >
                 <Play size={18} />
                 Start Demo Analysis
-                <ArrowRight size={18} />
               </button>
+              <div className="text-center text-xs text-slate-500">
+                Demo credits simulate assistant usage in this MVP. Real payment processing is not active.
+              </div>
             </form>
           ) : (
             <form id="new-workspace" onSubmit={submitRegister} className="space-y-5">
@@ -196,7 +194,7 @@ export function StartAccessClient() {
                   Set up the workspace context AMI will use for future briefings.
                 </p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-wrap gap-4">
                 <Field label="Name" value={register.name} onChange={(value) => setRegister((current) => ({ ...current, name: value }))} />
                 <Field
                   label="Email"
@@ -271,22 +269,6 @@ export function StartAccessClient() {
           {message && <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
         </section>
       </section>
-
-      <section id="how-it-works" className="mt-6 grid gap-4 lg:grid-cols-3">
-        {[
-          "Brief the marketplace decision",
-          "AMI coordinates assistant reasoning",
-          "Review one prioritized strategy"
-        ].map((item) => (
-          <div key={item} className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm">
-            {item}
-          </div>
-        ))}
-      </section>
-
-      <section id="pricing" className="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600 shadow-sm">
-        Demo credits simulate assistant usage in this MVP. Real payment processing is not active.
-      </section>
     </main>
   );
 }
@@ -303,7 +285,7 @@ function Field({
   type?: string;
 }) {
   return (
-    <label className="block">
+    <label className="block min-w-48 flex-1">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
         required

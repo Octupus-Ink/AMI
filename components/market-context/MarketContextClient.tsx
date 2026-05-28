@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Database, LinkIcon, RefreshCw } from "lucide-react";
+import { PageHeader, PageShell, StatusStrip, Surface } from "@/components/layout/PagePrimitives";
 import { Badge } from "@/components/ui/Badge";
 import { BusinessGoals, MarketContextPayloadSchema, type MarketContextPayload } from "@/lib/schemas/ami";
 
@@ -117,17 +118,15 @@ export function MarketContextClient() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <Badge tone="teal">Briefing</Badge>
-        <h1 className="mt-4 text-3xl font-semibold text-slate-950">Define the decision AMI should analyze</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-          AMI coordinates trend, competitor, supplier, and inventory signals to evaluate market conditions and generate
-          prioritized recommendations.
-        </p>
+    <PageShell className="max-w-5xl">
+      <PageHeader
+        eyebrow={<Badge tone="teal">Briefing</Badge>}
+        title="Define the decision AMI should analyze"
+        description="AMI coordinates five operational signals to evaluate market conditions and generate prioritized recommendations."
+      />
 
-        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <Surface className="mt-7">
+        <StatusStrip>
             <div className="flex items-start gap-3">
               <Database className="mt-0.5 text-teal-700" size={20} />
               <div>
@@ -151,16 +150,15 @@ export function MarketContextClient() {
               {inventoryConnected ? <RefreshCw size={16} /> : <LinkIcon size={16} />}
               {inventoryConnected ? "Re-sync" : "Connect inventory"}
             </button>
-          </div>
+        </StatusStrip>
           {inventoryDependentGoal && !inventoryConnected && (
             <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
               This goal works best with connected inventory. Connect inventory or continue with demo context.
             </p>
           )}
-        </div>
 
-        <form onSubmit={submit} className="mt-7 grid gap-5">
-          <div className="grid gap-5 md:grid-cols-2">
+        <form onSubmit={submit} className="mt-7 flex flex-col gap-5">
+          <div className="flex flex-wrap gap-5">
             <Field
               label="Product or product family"
               value={form.productName}
@@ -173,7 +171,7 @@ export function MarketContextClient() {
               onChange={(value) => updateForm({ targetMarketplace: value })}
             />
             <Field label="Supplier source" value={form.supplierSource} onChange={(value) => updateForm({ supplierSource: value })} />
-            <label className="block">
+            <label className="block min-w-64 flex-1">
               <span className="text-xs font-semibold uppercase text-slate-500">Business goal</span>
               <select
                 value={form.businessGoal}
@@ -190,7 +188,7 @@ export function MarketContextClient() {
                 {BusinessGoals.find((goal) => goal.id === form.businessGoal)?.description}
               </span>
             </label>
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="flex min-w-64 flex-1 flex-wrap gap-5">
               <Field label="Region" value={form.region} onChange={(value) => updateForm({ region: value })} />
               <Field label="Currency" value={form.currency} onChange={(value) => updateForm({ currency: value.toUpperCase() })} />
             </div>
@@ -206,8 +204,8 @@ export function MarketContextClient() {
           </button>
           {message && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
         </form>
-      </section>
-    </main>
+      </Surface>
+    </PageShell>
   );
 }
 
@@ -221,7 +219,7 @@ function Field({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block">
+    <label className="block min-w-64 flex-1">
       <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
       <input
         required

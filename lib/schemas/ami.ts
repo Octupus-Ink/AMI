@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const AssistantIdSchema = z.enum(["trend", "competitor", "supplier", "inventory"]);
+export const AssistantIdSchema = z.enum(["trend", "competitor", "supplier", "inventory", "risk"]);
 export const RiskLevelSchema = z.enum(["low", "medium", "high"]);
 export const ConfidenceLevelSchema = z.enum(["low", "medium", "high"]);
 export const SignalStrengthSchema = z.enum(["weak", "moderate", "strong"]);
@@ -36,6 +36,11 @@ export const VisibleAssistants = [
     id: "inventory",
     name: "Inventory Assistant",
     role: "Evaluates inventory posture, stock risk, margin context, and operational opportunity."
+  },
+  {
+    id: "risk",
+    name: "Risk Assistant",
+    role: "Reviews confidence, risk exposure, evidence gaps, and readiness for the recommended action."
   }
 ] as const;
 
@@ -171,7 +176,7 @@ export const RecommendationSchema = z.object({
   matchQuality: ConfidenceLevelSchema,
   primaryReason: z.string().min(4),
   suggestedNextStep: z.string().min(4),
-  assistantContributions: z.array(AssistantContributionSchema).length(4),
+  assistantContributions: z.array(AssistantContributionSchema).min(1),
   evidencePackageId: z.string(),
   status: z.enum(["new", "saved", "approved", "exported"]).default("new"),
   createdAt: z.string()
