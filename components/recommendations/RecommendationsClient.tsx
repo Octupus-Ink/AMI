@@ -41,7 +41,7 @@ function assistantTone(status: string | undefined): "neutral" | "green" | "amber
     return "green";
   }
 
-  if (status === "warning" || status === "skipped") {
+  if (status === "warning" || status === "skipped" || status === "fallback") {
     return "amber";
   }
 
@@ -59,12 +59,13 @@ function assistantTone(status: string | undefined): "neutral" | "green" | "amber
 const promoKeywords = ["promo", "promotion", "monitor", "campaign", "bundle", "seasonal", "validation", "rollout"];
 
 type RowDisplayVariant = "product" | "promo" | "inventory";
+type DisplayRisk = "low" | "medium" | "high" | "critical" | "unknown";
 
 type PreviewRowData = {
   id: string;
   title: string;
   summary: string;
-  risk: "low" | "medium" | "high";
+  risk: DisplayRisk;
   confidence?: "low" | "medium" | "high";
   meta?: string;
   variant: RowDisplayVariant;
@@ -111,8 +112,8 @@ type PromoMetaInput = {
   recommendedAction?: string;
 };
 
-function riskBadgeTone(risk: "low" | "medium" | "high") {
-  return risk === "high" ? "red" : risk === "medium" ? "amber" : "green";
+function riskBadgeTone(risk: DisplayRisk) {
+  return risk === "critical" || risk === "high" ? "red" : risk === "medium" || risk === "unknown" ? "amber" : "green";
 }
 
 function formatMargin(estimatedMargin: number | undefined) {
@@ -550,7 +551,6 @@ export function RecommendationsClient() {
   const router = useRouter();
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState<StrategyTab>("Product Candidates");
 
   useEffect(() => {
@@ -654,6 +654,73 @@ export function RecommendationsClient() {
         </section>
       )}
 
+      <SourceProof analysis={analysis} />
+
+      <Section className="border-b border-slate-200 pb-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-3xl">
+            <h2 className="text-xl font-semibold text-slate-950">Final AMI Verdict</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {analysis.finalVerdict?.finalVerdict ?? selected.recommendedAction}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge tone={riskBadgeTone(analysis.finalVerdict?.riskLevel ?? selected.riskLevel)}>
+              {analysis.finalVerdict?.riskLevel ?? selected.riskLevel} risk
+            </Badge>
+            <Badge tone="blue">
+              {Math.round((analysis.finalVerdict?.confidence ?? 0.6) * 100)}% confidence
+            </Badge>
+            {analysis.usedFallback && (
+              <Badge tone="amber">
+                {analysis.sourceCollectionStatus.usedFallback ? "Source fallback used" : "AI fallback used"}
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase text-slate-500">Recommended next action</p>
+            <p className="mt-2 text-sm font-semibold leading-6 text-slate-900">
+              {analysis.finalVerdict?.recommendedAction ?? selected.recommendedAction}
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {analysis.finalVerdict?.nextStep ?? selected.suggestedNextStep}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase text-slate-500">Portable action payload</p>
+            <dl className="mt-3 grid gap-x-4 gap-y-3 text-sm text-slate-700 sm:grid-cols-2">
+              <PayloadField label="Action type" value={analysis.externalActionPayload?.actionType ?? "Not available"} />
+              <PayloadField label="Priority" value={analysis.externalActionPayload?.priority ?? "Not available"} />
+              <PayloadField
+                label="Human approval"
+                value={analysis.externalActionPayload?.requiresHumanApproval === false ? "Not required" : "Required"}
+              />
+              <PayloadField label="Source run" value={analysis.analysisRunId} />
+            </dl>
+          </div>
+        </div>
+
+        {(analysis.finalVerdict?.agentAgreement.length || analysis.finalVerdict?.agentConflicts.length || analysis.finalVerdict?.evidenceSummary.length) && (
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            <VerdictList title="Agent Agreement" items={analysis.finalVerdict?.agentAgreement ?? []} />
+            <VerdictList title="Agent Conflicts" items={analysis.finalVerdict?.agentConflicts ?? []} />
+            <VerdictList title="Evidence Summary" items={analysis.finalVerdict?.evidenceSummary ?? []} />
+          </div>
+        )}
+
+        {analysis.graphData && (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Counter label="Base Opportunity" value={analysis.preliminaryMetrics?.opportunityScoreBase ?? 0} />
+            <Counter label="Demand Signal" value={analysis.preliminaryMetrics?.demandSignal ?? 0} />
+            <Counter label="Price Pressure" value={analysis.preliminaryMetrics?.pricePressure ?? 0} />
+            <Counter label="Products Analyzed" value={analysis.preliminaryMetrics?.productCount ?? 0} />
+          </div>
+        )}
+      </Section>
+
       <Section className="border-b border-slate-200 pb-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -673,7 +740,7 @@ export function RecommendationsClient() {
                 className="flex flex-col gap-3 border-b border-slate-100 py-3 last:border-b-0 sm:flex-row sm:items-start"
               >
                 <div className="min-w-32">
-                  <Badge tone={signal.risk === "high" ? "red" : signal.risk === "medium" ? "amber" : "green"}>
+                  <Badge tone={riskBadgeTone(signal.risk)}>
                     {signal.risk} risk
                   </Badge>
                 </div>
@@ -728,6 +795,104 @@ function Counter({ label, value }: { label: string; value: number }) {
     <div className="min-w-36 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function SourceProof({ analysis }: { analysis: AnalysisResult }) {
+  const evidence = analysis.evidenceRefs?.slice(0, 3) ?? [];
+  const collectedAt = analysis.sourceCollectionStatus.collectedAt
+    ? new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()
+    : "Not available";
+
+  return (
+    <Section className="border-b border-slate-200 pb-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-950">Source Proof</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            AMI marks live provider data separately from deterministic fallback. This run shows the provider status, fallback state,
+            collection time, and evidence references used for the analysis.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={analysis.sourceCollectionStatus.providerStatus === "live" ? "green" : "amber"}>
+            Provider {analysis.sourceCollectionStatus.providerStatus ?? analysis.sourceCollectionStatus.mode}
+          </Badge>
+          <Badge tone={analysis.sourceCollectionStatus.usedFallback ? "amber" : "green"}>
+            {analysis.sourceCollectionStatus.usedFallback ? "Fallback used" : "No source fallback"}
+          </Badge>
+        </div>
+      </div>
+
+      <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <ProofField label="Bright Data product" value={analysis.sourceCollectionStatus.brightDataProduct} />
+        <ProofField label="Source mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
+        <ProofField label="Collected at" value={collectedAt} />
+        <ProofField label="Products normalized" value={String(analysis.normalizedProducts?.length ?? 0)} />
+      </dl>
+
+      {analysis.sourceCollectionStatus.fallbackReason && (
+        <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          {analysis.sourceCollectionStatus.fallbackReason}
+        </p>
+      )}
+
+      {evidence.length > 0 && (
+        <div className="mt-5 flex flex-col gap-3">
+          {evidence.map((item) => (
+            <div key={item.id} className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-slate-950">{item.label}</p>
+                <Badge tone={item.provider === "brightdata" ? "green" : "amber"}>{item.provider}</Badge>
+              </div>
+              <p className="mt-1 text-sm leading-6 text-slate-600">{item.snippet ?? item.sourceType}</p>
+              {item.url && (
+                <a className="mt-2 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900" href={item.url} target="_blank">
+                  Open source URL
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function ProofField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
+      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</dd>
+    </div>
+  );
+}
+
+function VerdictList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
+      <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
+      {items.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-2">
+          {items.map((item) => (
+            <li key={item} className="text-sm leading-6 text-slate-700">
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-slate-600">No material item reported.</p>
+      )}
+    </div>
+  );
+}
+
+function PayloadField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
+      <dd className="mt-1 break-words font-semibold text-slate-900">{value}</dd>
     </div>
   );
 }
@@ -928,7 +1093,7 @@ function ActiveTabContent({
                     <Badge tone={assistantTone(analysis.assistantStatus?.[contribution.assistantId])}>
                       {formatMode(analysis.assistantStatus?.[contribution.assistantId] ?? "completed")}
                     </Badge>
-                    <Badge tone={contribution.risk === "high" ? "red" : contribution.risk === "medium" ? "amber" : "green"}>
+                    <Badge tone={riskBadgeTone(contribution.risk)}>
                       {contribution.confidence}
                     </Badge>
                   </div>
@@ -1063,7 +1228,7 @@ function PreviewRow({
 }: {
   title: string;
   summary: string;
-  risk: "low" | "medium" | "high";
+  risk: DisplayRisk;
   confidence?: "low" | "medium" | "high";
   meta?: string;
   variant?: RowDisplayVariant;

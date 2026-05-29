@@ -1,10 +1,36 @@
 import { z } from "zod";
+import {
+  AgentOutputUnion,
+  AgentStatusSchema as RuntimeAgentStatusSchema,
+  AgentTypeSchema,
+  CoordinatorSynthesisOutputSchema,
+  EvidenceRefSchema,
+  ExternalActionPayloadSchema,
+  RiskLevelSchema as RuntimeRiskLevelSchema,
+  VerdictAgentOutputSchema
+} from "@/lib/schemas/agents";
 
-export const AssistantIdSchema = z.enum(["trend", "competitor", "supplier", "inventory", "risk"]);
-export const RiskLevelSchema = z.enum(["low", "medium", "high"]);
+export const AssistantIdSchema = AgentTypeSchema;
+export const RiskLevelSchema = RuntimeRiskLevelSchema;
 export const ConfidenceLevelSchema = z.enum(["low", "medium", "high"]);
 export const SignalStrengthSchema = z.enum(["weak", "moderate", "strong"]);
-export const AnalysisStatusSchema = z.enum(["pending", "running", "completed", "failed", "warning", "skipped"]);
+export const AnalysisStatusSchema = z.enum([
+  "pending",
+  "created",
+  "collecting_data",
+  "normalizing_data",
+  "metrics_ready",
+  "agents_running",
+  "synthesizing",
+  "generating_verdict",
+  "running",
+  "completed",
+  "completed_with_fallback",
+  "failed",
+  "warning",
+  "skipped",
+  "fallback"
+]);
 export const SourceModeSchema = z.enum(["live", "demo_fallback", "demo_snapshot", "not_configured", "error"]);
 export const BusinessGoalSchema = z.enum(["discover_new_products", "stock_optimization", "revenue_stock_opportunities"]);
 export const InventorySourceStatusSchema = z.enum([
@@ -38,9 +64,14 @@ export const VisibleAssistants = [
     role: "Evaluates inventory posture, stock risk, margin context, and operational opportunity."
   },
   {
-    id: "risk",
-    name: "Risk Assistant",
-    role: "Reviews confidence, risk exposure, evidence gaps, and readiness for the recommended action."
+    id: "coordinator",
+    name: "Coordinator Agent",
+    role: "Compares specialist findings, detects agreements and conflicts, and isolates confidence gaps."
+  },
+  {
+    id: "strategy",
+    name: "Strategy Agent",
+    role: "Converts the synthesis into AMI's final business verdict, next step, and portable action payload."
   }
 ] as const;
 
@@ -161,6 +192,74 @@ export const SupplierOptionSchema = z.object({
   risk: RiskLevelSchema
 });
 
+export const NormalizedProductSchema = z.object({
+  source: z.string().min(1),
+  externalId: z.string().optional(),
+  title: z.string().min(1),
+  canonicalTitle: z.string().optional(),
+  category: z.string().optional(),
+  price: z.number().nonnegative().optional(),
+  currency: z.string().min(3).max(3).optional(),
+  priceUsd: z.number().nonnegative().optional(),
+  originalPriceUsd: z.number().nonnegative().optional(),
+  rating: z.number().min(0).max(5).optional(),
+  reviewsCount: z.number().int().nonnegative().optional(),
+  availability: z.string().optional(),
+  imageUrl: z.string().url().optional(),
+  supplierName: z.string().optional(),
+  supplierPrice: z.number().nonnegative().optional(),
+  estimatedDeliveryTime: z.string().optional(),
+  deliveryCostNote: z.string().optional(),
+  matchConfidence: z.number().min(0).max(1).optional(),
+  demandSignal: z.number().min(0).max(100).optional(),
+  pricePressure: z.number().min(0).max(100).optional(),
+  trendMomentum: z.number().min(0).max(100).optional(),
+  inventoryRisk: z.number().min(0).max(100).optional(),
+  estimatedMargin: z.number().optional(),
+  riskScore: z.number().min(0).max(100).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  lastUpdated: z.string().min(1),
+  evidenceRefs: z.array(z.string()).default([])
+});
+
+export const PreliminaryMetricsSchema = z.object({
+  estimatedMargin: z.number(),
+  demandSignal: z.number().min(0).max(100),
+  pricePressure: z.number().min(0).max(100),
+  supplierGap: z.number(),
+  inventoryRisk: z.number().min(0).max(100),
+  trendMomentum: z.number().min(0).max(100),
+  opportunityScoreBase: z.number().min(0).max(100),
+  productCount: z.number().int().nonnegative(),
+  evidenceCount: z.number().int().nonnegative()
+});
+
+const GraphPointSchema = z.object({
+  label: z.string(),
+  value: z.number(),
+  secondaryValue: z.number().optional(),
+  note: z.string().optional()
+});
+
+export const GraphDataSchema = z.object({
+  marginComparison: z.array(GraphPointSchema).default([]),
+  supplierComparison: z.array(GraphPointSchema).default([]),
+  demandTrend: z.array(GraphPointSchema).default([]),
+  riskBreakdown: z.array(GraphPointSchema).default([]),
+  pricePressure: z.array(GraphPointSchema).default([]),
+  opportunityScore: z.array(GraphPointSchema).default([])
+});
+
+export const AgentRunStatusSchema = z.object({
+  agentType: AgentTypeSchema,
+  status: RuntimeAgentStatusSchema,
+  label: z.string(),
+  latestActivity: z.string(),
+  confidence: z.number().min(0).max(1).optional(),
+  riskLevel: RiskLevelSchema.optional(),
+  usedFallback: z.boolean().default(false)
+});
+
 export const RecommendationSchema = z.object({
   recommendationId: z.string(),
   analysisRunId: z.string(),
@@ -194,8 +293,23 @@ export const AnalysisResultSchema = z.object({
     brightDataProduct: z.string(),
     mode: SourceModeSchema,
     label: z.string(),
-    collectedAt: z.string()
+    collectedAt: z.string(),
+    providerStatus: z.string().optional(),
+    usedFallback: z.boolean().default(false),
+    fallbackReason: z.string().optional(),
+    maxResults: z.number().int().positive().optional()
   }),
+  normalizedProducts: z.array(NormalizedProductSchema).default([]),
+  evidenceRefs: z.array(EvidenceRefSchema).default([]),
+  preliminaryMetrics: PreliminaryMetricsSchema.optional(),
+  graphData: GraphDataSchema.optional(),
+  agentStatus: z.array(AgentRunStatusSchema).default([]),
+  agentRuns: z.array(AgentOutputUnion).default([]),
+  synthesis: CoordinatorSynthesisOutputSchema.optional(),
+  finalVerdict: VerdictAgentOutputSchema.optional(),
+  externalActionPayload: ExternalActionPayloadSchema.optional(),
+  usedFallback: z.boolean().default(false),
+  fallbackReason: z.string().optional(),
   executiveRecommendation: RecommendationSchema,
   opportunities: z.array(RecommendationSchema).min(1),
   assistantFindings: z.array(AssistantFindingSchema),
@@ -266,6 +380,10 @@ export type AssistantContribution = z.infer<typeof AssistantContributionSchema>;
 export type AssistantFinding = z.infer<typeof AssistantFindingSchema>;
 export type EvidencePackage = z.infer<typeof EvidencePackageSchema>;
 export type SupplierOption = z.infer<typeof SupplierOptionSchema>;
+export type NormalizedProduct = z.infer<typeof NormalizedProductSchema>;
+export type PreliminaryMetrics = z.infer<typeof PreliminaryMetricsSchema>;
+export type GraphData = z.infer<typeof GraphDataSchema>;
+export type AgentRunStatus = z.infer<typeof AgentRunStatusSchema>;
 export type Recommendation = z.infer<typeof RecommendationSchema>;
 export type AnalysisResult = z.infer<typeof AnalysisResultSchema>;
 export type AssistantUsage = z.infer<typeof AssistantUsageSchema>;

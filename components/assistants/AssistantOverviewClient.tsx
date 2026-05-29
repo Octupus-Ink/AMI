@@ -62,7 +62,7 @@ export function AssistantOverviewClient() {
       <PageHeader
         eyebrow={<Badge tone="teal">Assistants</Badge>}
         title="Assistants"
-        description="Monitor five operational agents, credit limits, source activity, and threshold states."
+        description="Monitor AMI agents, credit limits, source activity, and threshold states."
       />
 
       <Surface className="mt-7">

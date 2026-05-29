@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasMongoUri } from "@/lib/db/mongoose";
+import { VisibleAssistants } from "@/lib/schemas/ami";
 
 export async function GET() {
   return NextResponse.json({
@@ -8,6 +9,6 @@ export async function GET() {
     mongoConfigured: hasMongoUri(),
     brightDataConfigured: Boolean(process.env.BRIGHT_DATA_API_KEY),
     brightDataMode: process.env.BRIGHT_DATA_API_KEY ? "live_when_endpoints_are_configured" : "demo_fallback",
-    visibleAssistants: ["Competitor Assistant", "Inventory Assistant", "Trend Assistant"]
+    visibleAssistants: VisibleAssistants.map((assistant) => assistant.name)
   });
 }

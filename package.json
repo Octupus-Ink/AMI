@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:env": "tsx tools/smoke-ami.ts env",
+    "test:aimlapi": "tsx tools/smoke-ami.ts aimlapi",
+    "test:brightdata": "tsx tools/smoke-ami.ts brightdata",
+    "test:analysis": "tsx tools/smoke-ami.ts analysis",
+    "test:fallback": "tsx tools/smoke-ami.ts fallback"
   },
   "dependencies": {
     "bcryptjs": "2.4.3",

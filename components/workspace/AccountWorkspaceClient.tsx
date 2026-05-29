@@ -709,7 +709,9 @@ export function AccountWorkspaceClient() {
                   <p className="mt-2 text-sm leading-6 text-slate-600">{recommendation.suggestedNextStep}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Badge tone="teal">{recommendation.confidenceLevel} confidence</Badge>
-                    <Badge tone={recommendation.riskLevel === "high" ? "red" : "amber"}>{recommendation.riskLevel} risk</Badge>
+                    <Badge tone={recommendation.riskLevel === "high" || recommendation.riskLevel === "critical" ? "red" : "amber"}>
+                      {recommendation.riskLevel} risk
+                    </Badge>
                   </div>
                 </div>
               ))}
