@@ -247,3 +247,15 @@ Demo fallback never fails only because inventory is missing. When no usable inve
 - MongoDB persistence is optional for local demo; in-memory state resets when the dev server restarts.
 - Inventory CSV/JSON uploads are temporary MVP source context, not full dataset ingestion or inventory table management.
 - External action payloads are generated for integration readiness only and do not call external systems.
+
+## Roadmap
+
+### Post-hackathon: Improving Bright Data scraper quality
+
+For the hackathon MVP, the Bright Data section focuses on “making it work” — ensuring the minimum evidence needed for a usable report is available.
+
+In the future, we plan to extend the current BrightData scraper library. The scrapers shipped today are the **default scrapers from the library**.
+
+The next step is to develop more **marketplace/product-specific** scrapers with higher extraction quality and more consistent report outputs (reducing empty results, timeouts, and formatting variability), while keeping the same normalization and traceability flow.
+
+
