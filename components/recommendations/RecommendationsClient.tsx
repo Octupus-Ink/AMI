@@ -92,6 +92,16 @@ type DrawerDetail = {
   evidence?: EvidencePackage;
 };
 
+type SupplierDrawerDetail = {
+  supplier: SupplierOption;
+  sourceMode: string;
+  marketplace?: string;
+  supplierPrice?: number;
+  brightDataProduct?: string;
+  brightDataMode?: string;
+  riskInputs?: string[];
+};
+
 const inventoryTitleMaxLength = 72;
 
 type PromoMetaInput = {
@@ -460,6 +470,65 @@ function drawerTitleForVariant(variant: RowDisplayVariant) {
   return "Inventory action detail";
 }
 
+function formatItemsCovered(totalProductCandidates: number, coveredCount?: number) {
+  if (totalProductCandidates <= 0) {
+    return "Coverage not available";
+  }
+
+  const covered = coveredCount ?? totalProductCandidates;
+  const noun = totalProductCandidates === 1 ? "product candidate" : "product candidates";
+
+  return `${covered} of ${totalProductCandidates} ${noun}`;
+}
+
+function formatSupplierRisk(risk: SupplierOption["risk"] | undefined) {
+  if (!risk) {
+    return "Not rated";
+  }
+
+  return risk.charAt(0).toUpperCase() + risk.slice(1);
+}
+
+function formatDeliveryBatch(delivery: string | undefined) {
+  if (!delivery?.trim()) {
+    return "Not available";
+  }
+
+  return delivery;
+}
+
+function resolveSupplierDrawerDetail(supplier: SupplierOption, analysis: AnalysisResult): SupplierDrawerDetail {
+  const evidence = analysis.evidencePackages[0];
+
+  return {
+    supplier,
+    sourceMode: formatMode(analysis.sourceCollectionStatus.mode),
+    marketplace: analysis.marketContext.targetMarketplace,
+    supplierPrice: evidence?.supplierPrice,
+    brightDataProduct: evidence?.brightDataProduct,
+    brightDataMode: evidence ? formatMode(evidence.brightDataMode) : undefined,
+    riskInputs: evidence?.riskInputs
+  };
+}
+
+function useDrawerLock(onClose: () => void) {
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = "";
+    };
+  }, [onClose]);
+}
+
 function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
   const evidence = analysis.evidencePackages[0];
 
@@ -693,6 +762,7 @@ function ActiveTabContent({
     [analysis, selected]
   );
   const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
+  const [supplierDrawer, setSupplierDrawer] = useState<SupplierDrawerDetail | null>(null);
 
   const openDrawer = (row: PreviewRowData) => {
     setDrawerDetail(resolveDrawerDetail(row, analysis, suppliers, selected));
@@ -782,17 +852,29 @@ function ActiveTabContent({
 
   if (activeTab === "Supplier Comparison") {
     return (
-      <div>
-        <TabHeader
-          title="Supplier Comparison"
-          description="Supplier options connected to this analysis. Aggregated selected-item coverage will be added in a later step."
-        />
-        {suppliers.length > 0 ? (
-          <SupplierTable suppliers={suppliers} />
-        ) : (
-          <p className="mt-4 text-sm text-slate-600">Supplier options connected to this analysis will appear here when available.</p>
-        )}
-      </div>
+      <>
+        <div>
+          <TabHeader
+            title="Supplier Comparison"
+            description="Compare supplier options connected to this analysis before finalizing selected products."
+          />
+          {selectedProductIds.size === 0 && (
+            <p className="mt-3 text-sm text-slate-600">
+              Select product candidates to prepare a Partner&apos;s Choice supplier coverage view.
+            </p>
+          )}
+          {suppliers.length > 0 ? (
+            <SupplierComparisonTable
+              suppliers={suppliers}
+              productCandidateCount={productRows.length}
+              onSeeDetails={(supplier) => setSupplierDrawer(resolveSupplierDrawerDetail(supplier, analysis))}
+            />
+          ) : (
+            <p className="mt-4 text-sm text-slate-600">Supplier options connected to this analysis will appear here when available.</p>
+          )}
+        </div>
+        {supplierDrawer && <SupplierDetailDrawer detail={supplierDrawer} onClose={() => setSupplierDrawer(null)} />}
+      </>
     );
   }
 
@@ -1042,21 +1124,7 @@ function ItemDetailDrawer({
   isSelected: boolean;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    document.addEventListener("keydown", handleEscape);
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.removeEventListener("keydown", handleEscape);
-      document.body.style.overflow = "";
-    };
-  }, [onClose]);
+  useDrawerLock(onClose);
 
   const marginLabel =
     detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
@@ -1265,13 +1333,23 @@ function TabHeader({ title, description }: { title: string; description: string 
   );
 }
 
-function SupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
+function SupplierComparisonTable({
+  suppliers,
+  productCandidateCount,
+  onSeeDetails
+}: {
+  suppliers: SupplierOption[];
+  productCandidateCount: number;
+  onSeeDetails: (supplier: SupplierOption) => void;
+}) {
+  const itemsCovered = formatItemsCovered(productCandidateCount);
+
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
         <thead>
           <tr className="text-xs uppercase text-slate-500">
-            {["Supplier", "Source", "Unit cost", "Delivery", "Availability", "Rating / quality", "Match", "Risk"].map((header) => (
+            {["Supplier", "Source", "Items covered", "Delivery batch", "Risk", "Action"].map((header) => (
               <th key={header} className="border-b border-slate-200 px-3 py-2 font-semibold">
                 {header}
               </th>
@@ -1283,16 +1361,124 @@ function SupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
             <tr key={`${supplier.supplierName}-${supplier.source}`}>
               <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-950">{supplier.supplierName}</td>
               <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">${supplier.estimatedUnitCost.toFixed(2)}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.estimatedDeliveryTime}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.availability}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.ratingQualityProxy}</td>
-              <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.matchConfidence}</td>
-              <td className="border-b border-slate-100 px-3 py-3 capitalize text-slate-700">{supplier.risk}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{itemsCovered}</td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
+                {formatDeliveryBatch(supplier.estimatedDeliveryTime)}
+              </td>
+              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierRisk(supplier.risk)}</td>
+              <td className="border-b border-slate-100 px-3 py-3">
+                <button
+                  type="button"
+                  onClick={() => onSeeDetails(supplier)}
+                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                >
+                  See details
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function SupplierDetailDrawer({ detail, onClose }: { detail: SupplierDrawerDetail; onClose: () => void }) {
+  useDrawerLock(onClose);
+
+  const { supplier } = detail;
+  const riskNotes =
+    detail.riskInputs && detail.riskInputs.length > 0
+      ? detail.riskInputs.join(", ")
+      : undefined;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button type="button" className="absolute inset-0 bg-slate-950/40" aria-label="Close drawer" onClick={onClose} />
+      <aside
+        className="absolute inset-0 flex flex-col bg-white md:inset-y-0 md:left-auto md:right-0 md:w-full md:max-w-lg md:border-l md:border-slate-200 md:shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="supplier-drawer-title"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 md:px-6">
+          <div className="min-w-0">
+            <h3 id="supplier-drawer-title" className="text-lg font-semibold text-slate-950">
+              Supplier detail
+            </h3>
+            <p className="mt-1 text-sm font-semibold text-slate-800">{supplier.supplierName}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-200 p-2 text-slate-700 hover:border-slate-300 hover:text-slate-950"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
+          <section>
+            <h4 className="text-sm font-semibold text-slate-950">Supplier summary</h4>
+            <dl className="mt-3 flex flex-col gap-2">
+              <DrawerField label="Supplier name" value={supplier.supplierName} />
+              <DrawerField label="Source" value={supplier.source} />
+              <DrawerField label="Match level" value={supplier.matchConfidence} />
+              <DrawerField label="Risk level" value={formatSupplierRisk(supplier.risk)} />
+            </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Cost and delivery</h4>
+            <dl className="mt-3 flex flex-col gap-2">
+              <DrawerField label="Unit cost" value={`$${supplier.estimatedUnitCost.toFixed(2)}`} />
+              <DrawerField label="Delivery estimate" value={formatDeliveryBatch(supplier.estimatedDeliveryTime)} />
+              {detail.supplierPrice !== undefined && (
+                <DrawerField label="Supplier price" value={`$${detail.supplierPrice.toFixed(2)}`} />
+              )}
+            </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Availability and quality</h4>
+            <dl className="mt-3 flex flex-col gap-2">
+              <DrawerField label="Availability" value={supplier.availability} />
+              <DrawerField label="Quality proxy" value={supplier.ratingQualityProxy} />
+            </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Source and Bright Data context</h4>
+            <dl className="mt-3 flex flex-col gap-2">
+              <DrawerField label="Source mode" value={detail.sourceMode} />
+              <DrawerField label="Marketplace" value={detail.marketplace} />
+              {detail.brightDataProduct && (
+                <>
+                  <div className="pt-1">
+                    <BrightDataPill />
+                  </div>
+                  <DrawerField label="Bright Data product" value={detail.brightDataProduct} />
+                  <DrawerField label="Bright Data mode" value={detail.brightDataMode} />
+                </>
+              )}
+            </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Risk notes</h4>
+            {riskNotes ? (
+              <dl className="mt-3 flex flex-col gap-2">
+                <DrawerField label="Risk level" value={formatSupplierRisk(supplier.risk)} />
+                <DrawerField label="Risk inputs" value={riskNotes} />
+              </dl>
+            ) : (
+              <p className="mt-3 text-sm text-slate-600">No additional supplier risk notes are available yet.</p>
+            )}
+          </section>
+        </div>
+      </aside>
     </div>
   );
 }
