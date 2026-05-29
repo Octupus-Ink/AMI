@@ -191,7 +191,17 @@ type SupplierDrawerDetail = {
   riskInputs?: string[];
 };
 
+type SupplierCandidateProductRow = {
+  productName: string;
+  unitCost: string;
+  delivery: string;
+  matchQuality: string;
+};
+
 const inventoryTitleMaxLength = 72;
+
+const supplierDeliveryCostFallback =
+  "Not included.\nDelivery is usually quoted by batch, volume, destination, and supplier terms.\nContact the provider to confirm shipping terms.";
 
 type PromoMetaInput = {
   assistantId?: string;
@@ -606,6 +616,70 @@ function formatDeliveryBatch(delivery: string | undefined) {
   return delivery;
 }
 
+function formatMatchQualityLabel(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatCandidateUnitCost(evidence: EvidencePackage | undefined, supplier: SupplierOption) {
+  if (evidence?.supplierPrice !== undefined) {
+    return `$${evidence.supplierPrice.toFixed(2)}`;
+  }
+
+  return `$${supplier.estimatedUnitCost.toFixed(2)}`;
+}
+
+function resolveCandidateMatchQuality(
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  evidence: EvidencePackage | undefined
+) {
+  if (opportunity?.matchQuality) {
+    return formatMatchQualityLabel(opportunity.matchQuality);
+  }
+
+  if (evidence?.matchQuality) {
+    return formatMatchQualityLabel(evidence.matchQuality);
+  }
+
+  return "Analysis-level";
+}
+
+function getDrawerCandidateProductRows(
+  productRows: PreviewRowData[],
+  selectedProductIds: Set<string>,
+  supplier: SupplierOption,
+  analysis: AnalysisResult
+): SupplierCandidateProductRow[] {
+  const visibleRows =
+    selectedProductIds.size > 0 ? productRows.filter((row) => selectedProductIds.has(row.id)) : productRows;
+
+  return visibleRows.map((row) => {
+    const recommendationId = row.id.replace(/^product-/, "");
+    const opportunity = analysis.opportunities.find((item) => item.recommendationId === recommendationId);
+    const evidence = opportunity
+      ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+      : undefined;
+
+    return {
+      productName: row.title,
+      unitCost: formatCandidateUnitCost(evidence, supplier),
+      delivery: formatDeliveryBatch(supplier.estimatedDeliveryTime),
+      matchQuality: resolveCandidateMatchQuality(opportunity, evidence)
+    };
+  });
+}
+
+function resolveSupplierDeliveryCost(analysis: AnalysisResult, supplier: SupplierOption) {
+  const matchedProduct = analysis.normalizedProducts?.find(
+    (product) => product.supplierName === supplier.supplierName && product.deliveryCostNote?.trim()
+  );
+
+  if (matchedProduct?.deliveryCostNote) {
+    return matchedProduct.deliveryCostNote;
+  }
+
+  return supplierDeliveryCostFallback;
+}
+
 function resolveSupplierDrawerDetail(
   supplier: SupplierOption,
   analysis: AnalysisResult,
@@ -665,6 +739,11 @@ export function RecommendationsClient() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<StrategyTab>("Product Candidates");
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(() => new Set());
+  const [selectedPromoIds, setSelectedPromoIds] = useState<Set<string>>(() => new Set());
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(() => new Set());
+  const [selectedSupplierIds, setSelectedSupplierIds] = useState<Set<string>>(() => new Set());
+  const [exportPlaceholderMessage, setExportPlaceholderMessage] = useState<string>("");
 
   useEffect(() => {
     async function load() {
@@ -768,73 +847,6 @@ export function RecommendationsClient() {
         </section>
       )}
 
-      <SourceProof analysis={analysis} />
-
-      <Section className="border-b border-slate-200 pb-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-3xl">
-            <h2 className="text-xl font-semibold text-slate-950">Final AMI Verdict</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {analysis.finalVerdict?.finalVerdict ?? selected.recommendedAction}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge tone={riskBadgeTone(analysis.finalVerdict?.riskLevel ?? selected.riskLevel)}>
-              {analysis.finalVerdict?.riskLevel ?? selected.riskLevel} risk
-            </Badge>
-            <Badge tone="blue">
-              {Math.round((analysis.finalVerdict?.confidence ?? 0.6) * 100)}% confidence
-            </Badge>
-            {sourceState.fallbackUsed && (
-              <Badge tone="amber">
-                {sourceState.mode === "mixed" ? "Partial fallback used" : "Source fallback used"}
-              </Badge>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase text-slate-500">Recommended next action</p>
-            <p className="mt-2 text-sm font-semibold leading-6 text-slate-900">
-              {analysis.finalVerdict?.recommendedAction ?? selected.recommendedAction}
-            </p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {analysis.finalVerdict?.nextStep ?? selected.suggestedNextStep}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase text-slate-500">Portable action payload</p>
-            <dl className="mt-3 grid gap-x-4 gap-y-3 text-sm text-slate-700 sm:grid-cols-2">
-              <PayloadField label="Action type" value={analysis.externalActionPayload?.actionType ?? "Not available"} />
-              <PayloadField label="Priority" value={analysis.externalActionPayload?.priority ?? "Not available"} />
-              <PayloadField
-                label="Human approval"
-                value={analysis.externalActionPayload?.requiresHumanApproval === false ? "Not required" : "Required"}
-              />
-              <PayloadField label="Source run" value={analysis.analysisRunId} />
-            </dl>
-          </div>
-        </div>
-
-        {(analysis.finalVerdict?.agentAgreement.length || analysis.finalVerdict?.agentConflicts.length || analysis.finalVerdict?.evidenceSummary.length) && (
-          <div className="mt-5 grid gap-4 lg:grid-cols-3">
-            <VerdictList title="Agent Agreement" items={analysis.finalVerdict?.agentAgreement ?? []} />
-            <VerdictList title="Agent Conflicts" items={analysis.finalVerdict?.agentConflicts ?? []} />
-            <VerdictList title="Evidence Summary" items={analysis.finalVerdict?.evidenceSummary ?? []} />
-          </div>
-        )}
-
-        {analysis.graphData && (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Counter label="Base Opportunity" value={analysis.preliminaryMetrics?.opportunityScoreBase ?? 0} />
-            <Counter label="Demand Signal" value={analysis.preliminaryMetrics?.demandSignal ?? 0} />
-            <Counter label="Price Pressure" value={analysis.preliminaryMetrics?.pricePressure ?? 0} />
-            <Counter label="Products Analyzed" value={analysis.preliminaryMetrics?.productCount ?? 0} />
-          </div>
-        )}
-      </Section>
-
       <Section className="border-b border-slate-200 pb-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -869,6 +881,40 @@ export function RecommendationsClient() {
         </div>
       </Section>
 
+      <Section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Partner’s Choice</p>
+            <p className="mt-2 text-sm font-semibold text-slate-950">
+              {`Partner’s Choice: ${selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size} selected ${selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size === 1 ? "item" : "items"} | ${selectedSupplierIds.size} ${selectedSupplierIds.size === 1 ? "supplier" : "suppliers"}`}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              {selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size > 0
+                ? "Review selections before exporting the final report."
+                : "Select product candidates, actions, or suppliers to prepare Partner’s Choice."}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size > 0) {
+                  setExportPlaceholderMessage("Report export is not connected yet.");
+                }
+              }}
+              disabled={selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size === 0}
+              className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Export AMI Report
+            </button>
+            {exportPlaceholderMessage ? (
+              <p className="text-xs leading-5 text-slate-600">{exportPlaceholderMessage}</p>
+            ) : null}
+          </div>
+        </div>
+      </Section>
+
       <Section>
         <div className="flex flex-wrap gap-2 border-b border-slate-200">
           {strategyTabs.map((tab) => (
@@ -888,7 +934,21 @@ export function RecommendationsClient() {
         </div>
 
         <Surface className="mt-5">
-          <ActiveTabContent activeTab={activeTab} analysis={analysis} selected={selected} evidence={evidence} suppliers={suppliers} />
+          <ActiveTabContent
+            activeTab={activeTab}
+            analysis={analysis}
+            selected={selected}
+            evidence={evidence}
+            suppliers={suppliers}
+            selectedProductIds={selectedProductIds}
+            selectedPromoIds={selectedPromoIds}
+            selectedInventoryIds={selectedInventoryIds}
+            selectedSupplierIds={selectedSupplierIds}
+            setSelectedProductIds={setSelectedProductIds}
+            setSelectedPromoIds={setSelectedPromoIds}
+            setSelectedInventoryIds={setSelectedInventoryIds}
+            setSelectedSupplierIds={setSelectedSupplierIds}
+          />
         </Surface>
       </Section>
 
@@ -913,153 +973,35 @@ function Counter({ label, value }: { label: string; value: number }) {
   );
 }
 
-function SourceProof({ analysis }: { analysis: AnalysisResult }) {
-  const sourceState = sourceStateForAnalysis(analysis);
-  const proofItems = analysis.sourceCollectionStatus.sourceProof?.length
-    ? analysis.sourceCollectionStatus.sourceProof.map((item) => ({
-        ...item,
-        title: safeDisplay(item.title, 120),
-        sourceUrl: toHttpSourceUrl(item.sourceUrl),
-        snippet: item.snippet ? sanitizeEvidenceSnippet(item.snippet) : null,
-        isFallback: Boolean(item.isFallback)
-      }))
-    : normalizeVisibleEvidenceItems(analysis.evidenceRefs, sourceState, analysis.sourceCollectionStatus.collectedAt);
-  const evidence = (sourceState.mode === "live" ? proofItems.filter((item) => !item.isFallback) : proofItems).slice(0, 3);
-  const collectedAt = analysis.sourceCollectionStatus.collectedAt
-    ? new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()
-    : "Not available";
-  const fallbackLabel =
-    sourceState.mode === "mixed"
-      ? "Partial fallback used"
-      : sourceState.fallbackUsed
-        ? "Fallback used"
-        : "No source fallback";
-  const fallbackTone = sourceState.fallbackUsed ? "amber" : "green";
-  const fallbackReason =
-    sourceState.fallbackUsed || sourceState.mode === "error" ? analysis.sourceCollectionStatus.fallbackReason : undefined;
-
-  return (
-    <Section className="border-b border-slate-200 pb-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-950">Source Proof</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            This run shows the resolved provider state, collection time, normalized product count, and clean evidence references used for the analysis.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={providerBadgeTone(sourceState.providerStatus)}>
-            {providerStatusLabel(sourceState.providerStatus)}
-          </Badge>
-          <Badge tone={fallbackTone}>
-            {fallbackLabel}
-          </Badge>
-        </div>
-      </div>
-
-      <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <ProofField label="Bright Data product" value={analysis.sourceCollectionStatus.brightDataProduct} />
-        <ProofField label="Source mode" value={sourceState.sourceLabel} />
-        <ProofField label="Collected at" value={collectedAt} />
-        <ProofField label="Products normalized" value={String(analysis.normalizedProducts?.length ?? 0)} />
-        {sourceState.mode === "mixed" && (
-          <>
-            <ProofField label="Live records" value={String(sourceState.liveRecordCount)} />
-            <ProofField label="Fallback records" value={String(sourceState.fallbackRecordCount)} />
-          </>
-        )}
-      </dl>
-
-      {fallbackReason && (
-        <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-          {safeDisplay(fallbackReason, 320)}
-        </p>
-      )}
-
-      {evidence.length > 0 && (
-        <div className="mt-5 flex flex-col gap-3">
-          {evidence.map((item, index) => (
-            <div key={`${item.title}-${item.collectedAt}-${index}`} className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-semibold text-slate-950">{item.title}</p>
-                <Badge tone={item.sourceType === "brightdata" ? "green" : item.isFallback ? "amber" : "blue"}>
-                  {sourceTypeLabel(item.sourceType)}
-                </Badge>
-              </div>
-              {item.snippet && <p className="mt-1 text-sm leading-6 text-slate-600">{item.snippet}</p>}
-              {item.sourceUrl ? (
-                <a
-                  className="mt-2 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900"
-                  href={item.sourceUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open source URL
-                </a>
-              ) : (
-                <p className="mt-2 text-sm font-semibold text-slate-500">Source URL unavailable</p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </Section>
-  );
-}
-
-function ProofField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
-      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</dd>
-    </div>
-  );
-}
-
-function VerdictList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
-      <p className="text-xs font-semibold uppercase text-slate-500">{title}</p>
-      {items.length > 0 ? (
-        <ul className="mt-2 flex flex-col gap-2">
-          {items.map((item) => (
-            <li key={item} className="text-sm leading-6 text-slate-700">
-              {item}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-2 text-sm text-slate-600">No material item reported.</p>
-      )}
-    </div>
-  );
-}
-
-function PayloadField({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
-      <dd className="mt-1 break-words font-semibold text-slate-900">{value}</dd>
-    </div>
-  );
-}
-
 function ActiveTabContent({
   activeTab,
   analysis,
   selected,
   evidence,
-  suppliers
+  suppliers,
+  selectedProductIds,
+  selectedPromoIds,
+  selectedInventoryIds,
+  selectedSupplierIds,
+  setSelectedProductIds,
+  setSelectedPromoIds,
+  setSelectedInventoryIds,
+  setSelectedSupplierIds
 }: {
   activeTab: StrategyTab;
   analysis: AnalysisResult;
   selected: AnalysisResult["executiveRecommendation"];
   evidence: AnalysisResult["evidencePackages"][number] | undefined;
   suppliers: SupplierOption[];
+  selectedProductIds: Set<string>;
+  selectedPromoIds: Set<string>;
+  selectedInventoryIds: Set<string>;
+  selectedSupplierIds: Set<string>;
+  setSelectedProductIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedPromoIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedInventoryIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedSupplierIds: Dispatch<SetStateAction<Set<string>>>;
 }) {
-  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(() => new Set());
-  const [selectedPromoIds, setSelectedPromoIds] = useState<Set<string>>(() => new Set());
-  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(() => new Set());
   const [productPage, setProductPage] = useState(0);
   const [promoPage, setPromoPage] = useState(0);
   const [inventoryPage, setInventoryPage] = useState(0);
@@ -1075,7 +1017,6 @@ function ActiveTabContent({
   );
   const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
   const [supplierDrawer, setSupplierDrawer] = useState<SupplierDrawerDetail | null>(null);
-  const [selectedSupplierIds, setSelectedSupplierIds] = useState<Set<string>>(() => new Set());
 
   const handleSupplierToggle = (supplierId: string, checked: boolean) => {
     if (hasExactSupplierProductMapping()) {
@@ -1216,6 +1157,9 @@ function ActiveTabContent({
           <SupplierDetailDrawer
             detail={supplierDrawer}
             isSelected={selectedSupplierIds.has(supplierDrawer.supplierId)}
+            productRows={productRows}
+            selectedProductIds={selectedProductIds}
+            analysis={analysis}
             onClose={() => setSupplierDrawer(null)}
           />
         )}
@@ -1751,18 +1695,54 @@ function SupplierComparisonTable({
   );
 }
 
+function SupplierCandidateProductsTable({ rows }: { rows: SupplierCandidateProductRow[] }) {
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+        <thead>
+          <tr className="text-xs uppercase text-slate-500">
+            {["Product", "Unit cost", "Delivery", "Match quality"].map((header) => (
+              <th key={header} className="border-b border-slate-200 px-2 py-2 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.productName}-${index}`}>
+              <td className="border-b border-slate-100 px-2 py-2 font-medium text-slate-950">{row.productName}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.unitCost}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.delivery}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.matchQuality}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SupplierDetailDrawer({
   detail,
   isSelected,
+  productRows,
+  selectedProductIds,
+  analysis,
   onClose
 }: {
   detail: SupplierDrawerDetail;
   isSelected: boolean;
+  productRows: PreviewRowData[];
+  selectedProductIds: Set<string>;
+  analysis: AnalysisResult;
   onClose: () => void;
 }) {
   useDrawerLock(onClose);
 
   const { supplier } = detail;
+  const candidateRows = getDrawerCandidateProductRows(productRows, selectedProductIds, supplier, analysis);
+  const deliveryCostCopy = resolveSupplierDeliveryCost(analysis, supplier);
   const riskNotes =
     detail.riskInputs && detail.riskInputs.length > 0
       ? detail.riskInputs.join(", ")
@@ -1816,6 +1796,27 @@ function SupplierDetailDrawer({
                 <DrawerField label="Supplier price" value={`$${detail.supplierPrice.toFixed(2)}`} />
               )}
             </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Candidate Products — {candidateRows.length}</h4>
+            {candidateRows.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-600">
+                No candidate products are available for this supplier context yet.
+              </p>
+            ) : (
+              <>
+                <SupplierCandidateProductsTable rows={candidateRows} />
+                <p className="mt-3 text-xs leading-5 text-slate-600">
+                  Unit cost and delivery are based on available supplier-level estimates and should be confirmed per
+                  product before purchase.
+                </p>
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-500">Delivery cost</p>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{deliveryCostCopy}</p>
+                </div>
+              </>
+            )}
           </section>
 
           <section className="mt-6 border-t border-slate-100 pt-5">
