@@ -1,4 +1,31 @@
 ﻿sku,productName,category,quantity,unitCost,currentPrice,currency,salesVelocity,lastSoldAt,margin,status
-AMZ-TMB-001,Insulated stainless steel tumbler,Drinkware,120,7.50,24.99,USD,medium,2026-05-20T18:30:00Z,0.42,active
-AMZ-ORG-002,Bamboo drawer organizer,Home and kitchen,45,5.20,18.99,USD,low,2026-05-18T14:10:00Z,0.38,slow_moving
-AMZ-LMP-003,Rechargeable desk lamp,Home office,18,11.40,34.99,USD,high,2026-05-25T09:05:00Z,0.51,low_stock
+AMZ-DRK-001,Insulated stainless steel tumbler,Drinkware,120,7.5,24.99,USD,medium,2026-05-20T18:30:00Z,0.42,active
+AMZ-DRK-002,Double-wall glass coffee mug set,Drinkware,34,9.8,29.99,USD,low,2026-05-14T10:15:00Z,0.36,slow_moving
+AMZ-DRK-003,Leakproof kids water bottle,Drinkware,16,6.25,19.99,USD,high,2026-05-26T15:45:00Z,0.48,low_stock
+AMZ-HNK-001,Bamboo drawer organizer,Home and kitchen,45,5.2,18.99,USD,low,2026-05-18T14:10:00Z,0.38,slow_moving
+AMZ-HNK-002,Silicone food storage bag set,Home and kitchen,210,4.1,16.99,USD,medium,2026-05-23T11:22:00Z,0.44,active
+AMZ-HNK-003,Magnetic spice rack organizer,Home and kitchen,12,8.6,27.99,USD,high,2026-05-27T09:40:00Z,0.51,low_stock
+AMZ-HOF-001,Rechargeable desk lamp,Home office,18,11.4,34.99,USD,high,2026-05-25T09:05:00Z,0.51,low_stock
+AMZ-HOF-002,Ergonomic laptop stand aluminum,Home office,76,10.75,32.99,USD,medium,2026-05-22T16:18:00Z,0.43,active
+AMZ-HOF-003,Cable management box large,Home office,88,6.9,24.49,USD,low,2026-05-12T13:30:00Z,0.35,slow_moving
+AMZ-PET-001,Interactive cat feather toy pack,Pet supplies,140,3.25,13.99,USD,high,2026-05-27T18:05:00Z,0.54,active
+AMZ-PET-002,Non-slip stainless pet bowl set,Pet supplies,52,5.7,21.99,USD,medium,2026-05-21T08:25:00Z,0.46,active
+AMZ-PET-003,Portable dog water bottle,Pet supplies,9,7.1,22.99,USD,high,2026-05-26T12:44:00Z,0.49,low_stock
+AMZ-FIT-001,Resistance bands set with handles,Fitness,130,6.85,24.99,USD,medium,2026-05-20T07:55:00Z,0.45,active
+AMZ-FIT-002,Foam roller high density,Fitness,24,8.4,26.99,USD,low,2026-05-11T19:20:00Z,0.34,slow_moving
+AMZ-FIT-003,Adjustable ankle weights pair,Fitness,15,12.6,39.99,USD,high,2026-05-27T10:05:00Z,0.5,low_stock
+AMZ-BTY-001,Silicone facial cleansing brush,Beauty,95,4.95,18.99,USD,medium,2026-05-22T20:30:00Z,0.47,active
+AMZ-BTY-002,Makeup sponge blender set,Beauty,180,2.15,10.99,USD,high,2026-05-27T13:12:00Z,0.56,active
+AMZ-BTY-003,Acrylic makeup organizer,Beauty,28,7.9,25.99,USD,low,2026-05-16T09:10:00Z,0.37,slow_moving
+AMZ-ELC-001,USB-C fast charging cable 2-pack,Electronics accessories,240,2.8,14.99,USD,high,2026-05-27T21:18:00Z,0.58,active
+AMZ-ELC-002,Bluetooth item tracker keychain,Electronics accessories,22,8.75,29.99,USD,high,2026-05-26T17:32:00Z,0.52,low_stock
+AMZ-ELC-003,Foldable phone stand desk mount,Electronics accessories,115,3.95,15.99,USD,medium,2026-05-19T15:02:00Z,0.44,active
+AMZ-BBY-001,Silicone baby bib set,Baby,70,3.65,15.99,USD,medium,2026-05-23T07:18:00Z,0.43,active
+AMZ-BBY-002,Baby stroller organizer bag,Baby,19,9.95,31.99,USD,high,2026-05-25T18:48:00Z,0.49,low_stock
+AMZ-BBY-003,Stackable baby food containers,Baby,105,4.85,17.99,USD,low,2026-05-13T11:35:00Z,0.32,slow_moving
+AMZ-OUT-001,Compact camping lantern rechargeable,Outdoor,33,10.2,34.99,USD,high,2026-05-26T22:05:00Z,0.53,low_stock
+AMZ-OUT-002,Waterproof picnic blanket,Outdoor,84,8.15,28.99,USD,medium,2026-05-21T12:12:00Z,0.41,active
+AMZ-OUT-003,Collapsible silicone travel bowl,Outdoor,66,3.4,13.99,USD,low,2026-05-15T16:00:00Z,0.35,slow_moving
+AMZ-TRV-001,Compression packing cube set,Travel accessories,57,8.3,29.99,USD,medium,2026-05-24T10:50:00Z,0.46,active
+AMZ-TRV-002,RFID blocking passport holder,Travel accessories,150,3.75,16.99,USD,high,2026-05-27T08:08:00Z,0.55,active
+AMZ-TRV-003,Hanging toiletry travel bag,Travel accessories,14,7.65,24.99,USD,high,2026-05-26T14:22:00Z,0.5,low_stock
