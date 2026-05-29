@@ -3,6 +3,7 @@ import type { MarketContextPayload, NormalizedProduct } from "@/lib/schemas/ami"
 import { NormalizedProductSchema } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import { EvidenceRefSchema } from "@/lib/schemas/agents";
+import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle, toHttpSourceUrl } from "@/lib/analysis/source-state";
 import type { BrightDataPayloadContext, BrightDataProduct } from "@/lib/data-providers/brightdata/types";
 
 const PRODUCT_ARRAY_KEYS = ["products", "results", "items", "data", "records", "organic", "shopping_results"];
@@ -99,29 +100,26 @@ function clamp(value: number, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
 }
 
-function truncateSnippet(text: string) {
-  return text.replace(/\s+/g, " ").trim().slice(0, 320);
-}
-
 function evidenceForProduct(
   record: Record<string, unknown>,
   product: BrightDataProduct,
   context: MarketContextPayload,
   collectedAt: string
 ): EvidenceRef {
-  const title = findString(record, TITLE_KEYS) ?? context.productName;
-  const url = findString(record, URL_KEYS);
+  const title = sanitizeEvidenceTitle(findString(record, TITLE_KEYS), context.productName);
+  const url = toHttpSourceUrl(findString(record, URL_KEYS));
   const snippetSource =
     findString(record, ["description", "snippet", "text", "about"]) ??
     `${title} observed through ${product} for ${context.targetMarketplace}.`;
+  const snippet = sanitizeEvidenceSnippet(snippetSource) ?? `${title} observed through ${product}.`;
 
   return EvidenceRefSchema.parse({
     id: `evidence_${randomUUID()}`,
     source: context.targetMarketplace,
     sourceType: product,
     label: title,
-    url,
-    snippet: truncateSnippet(snippetSource),
+    ...(url ? { url } : {}),
+    snippet,
     collectedAt,
     provider: "brightdata",
     product
@@ -195,15 +193,16 @@ export function normalizeBrightDataPayload(payload: unknown, payloadContext: Bri
 
 export function createFallbackProducts(context: MarketContextPayload, collectedAt: string, maxResults: number, reason: string) {
   const basePrice = context.businessGoal === "stock_optimization" ? 34.99 : 29.99;
+  const fallbackReason = reason.replace(/\.+$/g, "");
   const products = Array.from({ length: Math.min(maxResults, 5) }, (_, index) => {
     const price = Number((basePrice + index * 2.25).toFixed(2));
     const supplierPrice = Number((price * (0.54 + index * 0.02)).toFixed(2));
     const evidence = EvidenceRefSchema.parse({
       id: `fallback_evidence_${index + 1}`,
       source: context.targetMarketplace,
-      sourceType: "demo_snapshot",
+      sourceType: "demo_fallback",
       label: `${context.productName} fallback signal ${index + 1}`,
-      snippet: `${context.productName} deterministic fallback evidence used because ${reason}.`,
+      snippet: `${context.productName} deterministic fallback evidence used because ${fallbackReason}.`,
       collectedAt,
       provider: "demo_fallback",
       product: "Bright Data fallback"

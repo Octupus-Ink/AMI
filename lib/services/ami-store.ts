@@ -804,8 +804,15 @@ export async function saveAnalysisResult(result: AnalysisResult) {
           workspaceId: result.workspaceId,
           data: {
             analysisRunId: result.analysisRunId,
+            sourceMode: result.sourceCollectionStatus.mode,
+            providerStatus: result.sourceCollectionStatus.providerStatus,
+            fallbackUsed: result.sourceCollectionStatus.fallbackUsed,
+            demoSnapshotUsed: result.sourceCollectionStatus.demoSnapshotUsed,
+            liveProviderUsed: result.sourceCollectionStatus.liveProviderUsed,
+            sourceLabel: result.sourceCollectionStatus.sourceLabel,
             sourceCollectionStatus: result.sourceCollectionStatus,
             evidenceRefs: result.evidenceRefs,
+            sourceProof: result.sourceCollectionStatus.sourceProof,
             normalizedProductCount: result.normalizedProducts.length
           }
         },
@@ -890,52 +897,105 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
     coordinator: 5,
     strategy: 6
   };
+  const terminalSuccess = result.status === "completed" || result.status === "completed_with_fallback";
+  const executedAssistantIds = new Set<AssistantId>();
+
+  for (const run of result.agentRuns ?? []) {
+    executedAssistantIds.add(run.agentType);
+  }
+
+  for (const finding of result.assistantFindings ?? []) {
+    const status = result.assistantStatus?.[finding.assistantId];
+
+    if (status === "completed" || status === "warning" || status === "fallback" || status === "running") {
+      executedAssistantIds.add(finding.assistantId);
+    }
+  }
+
+  if (!executedAssistantIds.size && terminalSuccess) {
+    for (const contribution of result.executiveRecommendation.assistantContributions) {
+      executedAssistantIds.add(contribution.assistantId);
+    }
+  }
+
+  if (result.synthesis) {
+    executedAssistantIds.add("coordinator");
+  }
+
+  if (result.finalVerdict) {
+    executedAssistantIds.add("strategy");
+  }
+
+  if (!executedAssistantIds.size) {
+    return;
+  }
+
+  function nextUsage(current: AssistantUsage): AssistantUsage {
+    const cost = costs[current.assistantId];
+    const contribution = result.executiveRecommendation.assistantContributions.find(
+      (item) => item.assistantId === current.assistantId
+    );
+    const nextCredits = current.creditsUsed + cost;
+    const fallbackContribution =
+      current.assistantId === "coordinator"
+        ? result.synthesis?.summary
+        : current.assistantId === "strategy"
+          ? result.finalVerdict?.finalVerdict
+          : undefined;
+
+    return {
+      ...current,
+      usageCount: current.usageCount + 1,
+      creditsUsed: nextCredits,
+      estimatedUsageCost: Number((current.estimatedUsageCost + cost / 10).toFixed(2)),
+      lastRun: result.completedAt ?? new Date().toISOString(),
+      latestContribution: contribution?.latestContribution ?? fallbackContribution ?? current.latestContribution,
+      dataSourcesUsed: contribution?.dataSourcesUsed ?? current.dataSourcesUsed,
+      alertState: calculateAlertState(nextCredits, current.creditLimit)
+    };
+  }
 
   if (await databaseReady()) {
     const usages = (await AssistantUsageModel.find({ workspaceId }).lean()) as Array<{ _id: unknown; data: AssistantUsage }>;
+    const existingByAssistant = new Map(usages.map((entry) => [entry.data.assistantId, entry]));
+    const defaults = defaultAssistantUsage(workspaceId);
 
     await Promise.all(
-      usages.map((entry) => {
-        const cost = costs[entry.data.assistantId];
-        const contribution = result.executiveRecommendation.assistantContributions.find(
-          (item) => item.assistantId === entry.data.assistantId
-        );
-        const nextCredits = entry.data.creditsUsed + cost;
-        const data: AssistantUsage = {
-          ...entry.data,
-          usageCount: entry.data.usageCount + 1,
-          creditsUsed: nextCredits,
-          estimatedUsageCost: Number((entry.data.estimatedUsageCost + cost / 10).toFixed(2)),
-          lastRun: result.completedAt ?? new Date().toISOString(),
-          latestContribution: contribution?.latestContribution ?? entry.data.latestContribution,
-          dataSourcesUsed: contribution?.dataSourcesUsed ?? entry.data.dataSourcesUsed,
-          alertState: calculateAlertState(nextCredits, entry.data.creditLimit)
-        };
-
-        return AssistantUsageModel.findByIdAndUpdate(entry._id, { data });
-      })
+      defaults
+        .filter((entry) => executedAssistantIds.has(entry.assistantId))
+        .map((entry) =>
+          AssistantUsageModel.findOneAndUpdate(
+            { workspaceId, "data.assistantId": entry.assistantId },
+            {
+              workspaceId,
+              data: nextUsage(existingByAssistant.get(entry.assistantId)?.data ?? entry)
+            },
+            { upsert: true, new: true }
+          )
+        )
     );
     return;
   }
 
   const store = getDemoStore();
-  store.assistantUsage = store.assistantUsage.map((usage) => {
-    const cost = costs[usage.assistantId];
-    const contribution = result.executiveRecommendation.assistantContributions.find(
-      (item) => item.assistantId === usage.assistantId
-    );
-    const nextCredits = usage.creditsUsed + cost;
+  const defaults = defaultAssistantUsage(workspaceId);
 
-    return {
-      ...usage,
-      usageCount: usage.usageCount + 1,
-      creditsUsed: nextCredits,
-      estimatedUsageCost: Number((usage.estimatedUsageCost + cost / 10).toFixed(2)),
-      lastRun: result.completedAt ?? new Date().toISOString(),
-      latestContribution: contribution?.latestContribution ?? usage.latestContribution,
-      dataSourcesUsed: contribution?.dataSourcesUsed ?? usage.dataSourcesUsed,
-      alertState: calculateAlertState(nextCredits, usage.creditLimit)
-    };
+  for (const usage of defaults) {
+    const exists = store.assistantUsage.some((entry) => {
+      const usageWithWorkspace = entry as AssistantUsage & { workspaceId?: string };
+      return usageWithWorkspace.assistantId === usage.assistantId && (!usageWithWorkspace.workspaceId || usageWithWorkspace.workspaceId === workspaceId);
+    });
+
+    if (!exists) {
+      store.assistantUsage.push(usage);
+    }
+  }
+
+  store.assistantUsage = store.assistantUsage.map((usage) => {
+    const usageWithWorkspace = usage as AssistantUsage & { workspaceId?: string };
+    const belongsToWorkspace = !usageWithWorkspace.workspaceId || usageWithWorkspace.workspaceId === workspaceId;
+
+    return belongsToWorkspace && executedAssistantIds.has(usage.assistantId) ? nextUsage(usage) : usage;
   });
 }
 

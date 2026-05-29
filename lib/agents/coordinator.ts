@@ -4,6 +4,7 @@ import {
   type CoordinatorSynthesisOutput
 } from "@/lib/schemas/agents";
 import type { AgentContext } from "@/lib/agents/types";
+import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle } from "@/lib/analysis/source-state";
 import { generateAgentJson } from "@/lib/llm-providers/aimlapi/structured-json";
 
 function fallbackCoordinator(context: AgentContext, findings: AgentFinding[], status: "completed" | "fallback"): CoordinatorSynthesisOutput {
@@ -58,8 +59,8 @@ export async function runCoordinatorAgent(
     evidence: context.evidenceRefs.slice(0, 10).map((ref) => ({
       id: ref.id,
       sourceType: ref.sourceType,
-      label: ref.label,
-      snippet: ref.snippet
+      label: sanitizeEvidenceTitle(ref.label),
+      snippet: sanitizeEvidenceSnippet(ref.snippet)
     })),
     findings,
     requiredJsonShape: {

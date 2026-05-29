@@ -12,6 +12,7 @@ import {
 import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
+import { normalizeVisibleEvidenceItems, resolveSourceState, sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
 import type { AnalysisResult, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
 
@@ -26,10 +27,96 @@ const strategyTabs = [
 type StrategyTab = (typeof strategyTabs)[number];
 
 function formatMode(mode: SourceMode | string) {
+  if (mode === "pending") {
+    return "Pending";
+  }
+
+  if (mode === "demo_fallback" || mode === "demo_snapshot") {
+    return "Demo fallback";
+  }
+
+  if (mode === "mixed") {
+    return "Mixed";
+  }
+
+  if (mode === "error" || mode === "not_configured") {
+    return "Provider failed";
+  }
+
   return String(mode)
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function sourceStateForAnalysis(analysis: AnalysisResult) {
+  return resolveSourceState({
+    mode: analysis.sourceCollectionStatus.mode,
+    providerStatus: analysis.sourceCollectionStatus.providerStatus,
+    usedFallback: analysis.sourceCollectionStatus.usedFallback,
+    fallbackUsed: analysis.sourceCollectionStatus.fallbackUsed,
+    demoSnapshotUsed: analysis.sourceCollectionStatus.demoSnapshotUsed,
+    liveProviderUsed: analysis.sourceCollectionStatus.liveProviderUsed,
+    products: analysis.normalizedProducts,
+    evidenceRefs: analysis.evidenceRefs,
+    sourceProof: analysis.sourceCollectionStatus.sourceProof
+  });
+}
+
+function providerStatusLabel(status: string) {
+  if (status === "live_success" || status === "live") {
+    return "Provider live";
+  }
+
+  if (status === "fallback_used" || status === "fallback") {
+    return "Fallback used";
+  }
+
+  if (status === "partial_fallback") {
+    return "Partial fallback used";
+  }
+
+  if (status === "failed" || status === "error" || status === "not_configured") {
+    return "Provider failed";
+  }
+
+  return "Checking provider";
+}
+
+function providerBadgeTone(status: string): "green" | "amber" | "red" {
+  if (status === "live_success" || status === "live") {
+    return "green";
+  }
+
+  if (status === "failed" || status === "error" || status === "not_configured") {
+    return "red";
+  }
+
+  return "amber";
+}
+
+function sourceTypeLabel(sourceType: string) {
+  if (sourceType === "brightdata") {
+    return "Bright Data";
+  }
+
+  if (sourceType === "demo_fallback") {
+    return "Demo fallback";
+  }
+
+  if (sourceType === "provider") {
+    return "Provider";
+  }
+
+  if (sourceType === "manual") {
+    return "Manual";
+  }
+
+  return "Unknown";
+}
+
+function safeDisplay(value: string, maxLength = 520) {
+  return sanitizeEvidenceSnippet(value, maxLength) ?? "Unavailable";
 }
 
 function goalLabel(goalId: string) {
@@ -621,6 +708,7 @@ export function RecommendationsClient() {
     return null;
   }
 
+  const sourceState = sourceStateForAnalysis(analysis);
   const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === selected.evidencePackageId);
   const suppliers = analysis.supplierOptions?.length ? analysis.supplierOptions : fallbackSupplierOptions(analysis);
   const strategySignals =
@@ -657,7 +745,7 @@ export function RecommendationsClient() {
               </span>
               <span>
                 <span className="font-semibold text-slate-950">Source mode:</span>{" "}
-                {formatMode(analysis.sourceCollectionStatus.mode)}
+                {sourceState.sourceLabel}
               </span>
               <BrightDataPill />
             </div>
@@ -675,7 +763,7 @@ export function RecommendationsClient() {
         <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <ShieldAlert className="mt-1 text-amber-800" size={20} />
-            <p className="text-sm leading-6 text-amber-950">{analysis.warnings[0]}</p>
+            <p className="text-sm leading-6 text-amber-950">{safeDisplay(analysis.warnings[0], 360)}</p>
           </div>
         </section>
       )}
@@ -697,9 +785,9 @@ export function RecommendationsClient() {
             <Badge tone="blue">
               {Math.round((analysis.finalVerdict?.confidence ?? 0.6) * 100)}% confidence
             </Badge>
-            {analysis.usedFallback && (
+            {sourceState.fallbackUsed && (
               <Badge tone="amber">
-                {analysis.sourceCollectionStatus.usedFallback ? "Source fallback used" : "AI fallback used"}
+                {sourceState.mode === "mixed" ? "Partial fallback used" : "Source fallback used"}
               </Badge>
             )}
           </div>
@@ -826,10 +914,29 @@ function Counter({ label, value }: { label: string; value: number }) {
 }
 
 function SourceProof({ analysis }: { analysis: AnalysisResult }) {
-  const evidence = analysis.evidenceRefs?.slice(0, 3) ?? [];
+  const sourceState = sourceStateForAnalysis(analysis);
+  const proofItems = analysis.sourceCollectionStatus.sourceProof?.length
+    ? analysis.sourceCollectionStatus.sourceProof.map((item) => ({
+        ...item,
+        title: safeDisplay(item.title, 120),
+        sourceUrl: toHttpSourceUrl(item.sourceUrl),
+        snippet: item.snippet ? sanitizeEvidenceSnippet(item.snippet) : null,
+        isFallback: Boolean(item.isFallback)
+      }))
+    : normalizeVisibleEvidenceItems(analysis.evidenceRefs, sourceState, analysis.sourceCollectionStatus.collectedAt);
+  const evidence = (sourceState.mode === "live" ? proofItems.filter((item) => !item.isFallback) : proofItems).slice(0, 3);
   const collectedAt = analysis.sourceCollectionStatus.collectedAt
     ? new Date(analysis.sourceCollectionStatus.collectedAt).toLocaleString()
     : "Not available";
+  const fallbackLabel =
+    sourceState.mode === "mixed"
+      ? "Partial fallback used"
+      : sourceState.fallbackUsed
+        ? "Fallback used"
+        : "No source fallback";
+  const fallbackTone = sourceState.fallbackUsed ? "amber" : "green";
+  const fallbackReason =
+    sourceState.fallbackUsed || sourceState.mode === "error" ? analysis.sourceCollectionStatus.fallbackReason : undefined;
 
   return (
     <Section className="border-b border-slate-200 pb-6">
@@ -837,46 +944,60 @@ function SourceProof({ analysis }: { analysis: AnalysisResult }) {
         <div>
           <h2 className="text-xl font-semibold text-slate-950">Source Proof</h2>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            AMI marks live provider data separately from deterministic fallback. This run shows the provider status, fallback state,
-            collection time, and evidence references used for the analysis.
+            This run shows the resolved provider state, collection time, normalized product count, and clean evidence references used for the analysis.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Badge tone={analysis.sourceCollectionStatus.providerStatus === "live" ? "green" : "amber"}>
-            Provider {analysis.sourceCollectionStatus.providerStatus ?? analysis.sourceCollectionStatus.mode}
+          <Badge tone={providerBadgeTone(sourceState.providerStatus)}>
+            {providerStatusLabel(sourceState.providerStatus)}
           </Badge>
-          <Badge tone={analysis.sourceCollectionStatus.usedFallback ? "amber" : "green"}>
-            {analysis.sourceCollectionStatus.usedFallback ? "Fallback used" : "No source fallback"}
+          <Badge tone={fallbackTone}>
+            {fallbackLabel}
           </Badge>
         </div>
       </div>
 
       <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <ProofField label="Bright Data product" value={analysis.sourceCollectionStatus.brightDataProduct} />
-        <ProofField label="Source mode" value={formatMode(analysis.sourceCollectionStatus.mode)} />
+        <ProofField label="Source mode" value={sourceState.sourceLabel} />
         <ProofField label="Collected at" value={collectedAt} />
         <ProofField label="Products normalized" value={String(analysis.normalizedProducts?.length ?? 0)} />
+        {sourceState.mode === "mixed" && (
+          <>
+            <ProofField label="Live records" value={String(sourceState.liveRecordCount)} />
+            <ProofField label="Fallback records" value={String(sourceState.fallbackRecordCount)} />
+          </>
+        )}
       </dl>
 
-      {analysis.sourceCollectionStatus.fallbackReason && (
+      {fallbackReason && (
         <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-          {analysis.sourceCollectionStatus.fallbackReason}
+          {safeDisplay(fallbackReason, 320)}
         </p>
       )}
 
       {evidence.length > 0 && (
         <div className="mt-5 flex flex-col gap-3">
-          {evidence.map((item) => (
-            <div key={item.id} className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
+          {evidence.map((item, index) => (
+            <div key={`${item.title}-${item.collectedAt}-${index}`} className="border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-semibold text-slate-950">{item.label}</p>
-                <Badge tone={item.provider === "brightdata" ? "green" : "amber"}>{item.provider}</Badge>
+                <p className="text-sm font-semibold text-slate-950">{item.title}</p>
+                <Badge tone={item.sourceType === "brightdata" ? "green" : item.isFallback ? "amber" : "blue"}>
+                  {sourceTypeLabel(item.sourceType)}
+                </Badge>
               </div>
-              <p className="mt-1 text-sm leading-6 text-slate-600">{item.snippet ?? item.sourceType}</p>
-              {item.url && (
-                <a className="mt-2 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900" href={item.url} target="_blank">
+              {item.snippet && <p className="mt-1 text-sm leading-6 text-slate-600">{item.snippet}</p>}
+              {item.sourceUrl ? (
+                <a
+                  className="mt-2 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900"
+                  href={item.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Open source URL
                 </a>
+              ) : (
+                <p className="mt-2 text-sm font-semibold text-slate-500">Source URL unavailable</p>
               )}
             </div>
           ))}
@@ -1500,10 +1621,12 @@ function DrawerField({ label, value }: { label: string; value?: string }) {
     return null;
   }
 
+  const displayValue = safeDisplay(value);
+
   return (
     <div>
       <dt className="text-xs font-semibold uppercase text-slate-500">{label}</dt>
-      <dd className="mt-1 text-sm leading-6 text-slate-800">{value}</dd>
+      <dd className="mt-1 text-sm leading-6 text-slate-800">{displayValue}</dd>
     </div>
   );
 }
@@ -1738,10 +1861,12 @@ function SupplierDetailDrawer({
 }
 
 function Comparison({ label, value }: { label: string; value: string }) {
+  const displayValue = safeDisplay(value);
+
   return (
     <div className="min-w-56 flex-1 rounded-lg border border-slate-200 bg-white p-4">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-2 break-words text-sm font-semibold text-slate-900">{value}</p>
+      <p className="mt-2 break-words text-sm font-semibold text-slate-900">{displayValue}</p>
     </div>
   );
 }
