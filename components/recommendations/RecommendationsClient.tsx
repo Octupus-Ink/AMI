@@ -181,6 +181,7 @@ type DrawerDetail = {
 };
 
 type SupplierDrawerDetail = {
+  supplierId: string;
   supplier: SupplierOption;
   sourceMode: string;
   marketplace?: string;
@@ -558,15 +559,35 @@ function drawerTitleForVariant(variant: RowDisplayVariant) {
   return "Inventory action detail";
 }
 
-function formatItemsCovered(totalProductCandidates: number, coveredCount?: number) {
+function hasExactSupplierProductMapping() {
+  return false;
+}
+
+// When supplierProductMap is available, wire:
+// - deselect confirmation
+// - add-supplier confirmation
+// - session "don't show again" flags (useState in ActiveTabContent)
+
+function getSupplierRowId(supplier: SupplierOption, index: number) {
+  return `supplier-${index}-${supplier.supplierName}-${supplier.source}`;
+}
+
+function formatItemsCovered(totalProductCandidates: number, selectedProductCandidates: number) {
   if (totalProductCandidates <= 0) {
     return "Coverage not available";
   }
 
-  const covered = coveredCount ?? totalProductCandidates;
-  const noun = totalProductCandidates === 1 ? "product candidate" : "product candidates";
+  if (selectedProductCandidates > 0) {
+    const noun = selectedProductCandidates === 1 ? "selected product" : "selected products";
+    return `${selectedProductCandidates} of ${selectedProductCandidates} ${noun}`;
+  }
 
-  return `${covered} of ${totalProductCandidates} ${noun}`;
+  const noun = totalProductCandidates === 1 ? "product candidate" : "product candidates";
+  return `${totalProductCandidates} of ${totalProductCandidates} ${noun}`;
+}
+
+function formatSupplierSelectedCount(count: number) {
+  return count === 1 ? "1 supplier selected" : `${count} suppliers selected`;
 }
 
 function formatSupplierRisk(risk: SupplierOption["risk"] | undefined) {
@@ -585,10 +606,15 @@ function formatDeliveryBatch(delivery: string | undefined) {
   return delivery;
 }
 
-function resolveSupplierDrawerDetail(supplier: SupplierOption, analysis: AnalysisResult): SupplierDrawerDetail {
+function resolveSupplierDrawerDetail(
+  supplier: SupplierOption,
+  analysis: AnalysisResult,
+  supplierId: string
+): SupplierDrawerDetail {
   const evidence = analysis.evidencePackages[0];
 
   return {
+    supplierId,
     supplier,
     sourceMode: formatMode(analysis.sourceCollectionStatus.mode),
     marketplace: analysis.marketContext.targetMarketplace,
@@ -1049,6 +1075,16 @@ function ActiveTabContent({
   );
   const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
   const [supplierDrawer, setSupplierDrawer] = useState<SupplierDrawerDetail | null>(null);
+  const [selectedSupplierIds, setSelectedSupplierIds] = useState<Set<string>>(() => new Set());
+
+  const handleSupplierToggle = (supplierId: string, checked: boolean) => {
+    if (hasExactSupplierProductMapping()) {
+      // Future: confirmation modals and product sync when exact mapping exists.
+      return;
+    }
+
+    toggleSelection(setSelectedSupplierIds, supplierId, checked);
+  };
 
   const openDrawer = (row: PreviewRowData) => {
     setDrawerDetail(resolveDrawerDetail(row, analysis, suppliers, selected));
@@ -1140,26 +1176,49 @@ function ActiveTabContent({
     return (
       <>
         <div>
-          <TabHeader
-            title="Supplier Comparison"
-            description="Compare supplier options connected to this analysis before finalizing selected products."
-          />
-          {selectedProductIds.size === 0 && (
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <TabHeader
+              title="Supplier Comparison"
+              description="Compare supplier options connected to this analysis and select suppliers to prepare Partner's Choice coverage."
+            />
+            <p className="text-sm text-slate-600">{formatSupplierSelectedCount(selectedSupplierIds.size)}</p>
+          </div>
+          {selectedProductIds.size > 0 ? (
             <p className="mt-3 text-sm text-slate-600">
-              Select product candidates to prepare a Partner&apos;s Choice supplier coverage view.
+              Supplier coverage is currently scoped to selected product candidates.
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-slate-600">
+              Select product candidates to preview selected-product supplier coverage.
+            </p>
+          )}
+          {selectedSupplierIds.size > 0 && selectedProductIds.size === 0 && (
+            <p className="mt-2 text-sm text-slate-600">
+              Supplier selected. Select product candidates manually to prepare Partner&apos;s Choice coverage.
             </p>
           )}
           {suppliers.length > 0 ? (
             <SupplierComparisonTable
               suppliers={suppliers}
               productCandidateCount={productRows.length}
-              onSeeDetails={(supplier) => setSupplierDrawer(resolveSupplierDrawerDetail(supplier, analysis))}
+              selectedProductCount={selectedProductIds.size}
+              selectedSupplierIds={selectedSupplierIds}
+              onToggleSupplier={handleSupplierToggle}
+              onSeeDetails={(supplier, supplierId) =>
+                setSupplierDrawer(resolveSupplierDrawerDetail(supplier, analysis, supplierId))
+              }
             />
           ) : (
             <p className="mt-4 text-sm text-slate-600">Supplier options connected to this analysis will appear here when available.</p>
           )}
         </div>
-        {supplierDrawer && <SupplierDetailDrawer detail={supplierDrawer} onClose={() => setSupplierDrawer(null)} />}
+        {supplierDrawer && (
+          <SupplierDetailDrawer
+            detail={supplierDrawer}
+            isSelected={selectedSupplierIds.has(supplierDrawer.supplierId)}
+            onClose={() => setSupplierDrawer(null)}
+          />
+        )}
       </>
     );
   }
@@ -1624,13 +1683,19 @@ function TabHeader({ title, description }: { title: string; description: string 
 function SupplierComparisonTable({
   suppliers,
   productCandidateCount,
+  selectedProductCount,
+  selectedSupplierIds,
+  onToggleSupplier,
   onSeeDetails
 }: {
   suppliers: SupplierOption[];
   productCandidateCount: number;
-  onSeeDetails: (supplier: SupplierOption) => void;
+  selectedProductCount: number;
+  selectedSupplierIds: Set<string>;
+  onToggleSupplier: (supplierId: string, checked: boolean) => void;
+  onSeeDetails: (supplier: SupplierOption, supplierId: string) => void;
 }) {
-  const itemsCovered = formatItemsCovered(productCandidateCount);
+  const itemsCovered = formatItemsCovered(productCandidateCount, selectedProductCount);
 
   return (
     <div className="mt-4 overflow-x-auto">
@@ -1645,33 +1710,56 @@ function SupplierComparisonTable({
           </tr>
         </thead>
         <tbody>
-          {suppliers.map((supplier) => (
-            <tr key={`${supplier.supplierName}-${supplier.source}`}>
-              <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-950">{supplier.supplierName}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{itemsCovered}</td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
-                {formatDeliveryBatch(supplier.estimatedDeliveryTime)}
-              </td>
-              <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierRisk(supplier.risk)}</td>
-              <td className="border-b border-slate-100 px-3 py-3">
-                <button
-                  type="button"
-                  onClick={() => onSeeDetails(supplier)}
-                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
-                >
-                  See details
-                </button>
-              </td>
-            </tr>
-          ))}
+          {suppliers.map((supplier, index) => {
+            const supplierId = getSupplierRowId(supplier, index);
+
+            return (
+              <tr key={supplierId}>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedSupplierIds.has(supplierId)}
+                      onChange={(event) => onToggleSupplier(supplierId, event.target.checked)}
+                      aria-label={`Select ${supplier.supplierName}`}
+                      className="mt-0.5 size-4 shrink-0 rounded border-slate-300 text-teal-600 focus:ring-teal-600"
+                    />
+                    <span className="font-semibold text-slate-950">{supplier.supplierName}</span>
+                  </div>
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{itemsCovered}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
+                  {formatDeliveryBatch(supplier.estimatedDeliveryTime)}
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierRisk(supplier.risk)}</td>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <button
+                    type="button"
+                    onClick={() => onSeeDetails(supplier, supplierId)}
+                    className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                  >
+                    See details
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-function SupplierDetailDrawer({ detail, onClose }: { detail: SupplierDrawerDetail; onClose: () => void }) {
+function SupplierDetailDrawer({
+  detail,
+  isSelected,
+  onClose
+}: {
+  detail: SupplierDrawerDetail;
+  isSelected: boolean;
+  onClose: () => void;
+}) {
   useDrawerLock(onClose);
 
   const { supplier } = detail;
@@ -1696,6 +1784,7 @@ function SupplierDetailDrawer({ detail, onClose }: { detail: SupplierDrawerDetai
               Supplier detail
             </h3>
             <p className="mt-1 text-sm font-semibold text-slate-800">{supplier.supplierName}</p>
+            <p className="mt-1 text-xs font-semibold uppercase text-slate-500">{isSelected ? "Selected" : "Not selected"}</p>
           </div>
           <button
             type="button"
