@@ -804,9 +804,15 @@ export async function saveAnalysisResult(result: AnalysisResult) {
           workspaceId: result.workspaceId,
           data: {
             analysisRunId: result.analysisRunId,
-            sourceMode: result.sourceCollectionStatus.mode,
+            runId: result.analysisRunId,
+            sourceMode: result.sourceMode,
+            fallbackUsed: result.fallbackUsed,
+            sourceProvider: result.sourceProvider,
+            sourceProducts: result.sourceProducts,
+            sourceSummary: result.sourceSummary,
+            rawSnapshotMetadata: result.rawSnapshotMetadata,
+            evidenceMetadata: result.evidenceMetadata,
             providerStatus: result.sourceCollectionStatus.providerStatus,
-            fallbackUsed: result.sourceCollectionStatus.fallbackUsed,
             demoSnapshotUsed: result.sourceCollectionStatus.demoSnapshotUsed,
             liveProviderUsed: result.sourceCollectionStatus.liveProviderUsed,
             sourceLabel: result.sourceCollectionStatus.sourceLabel,
@@ -821,20 +827,48 @@ export async function saveAnalysisResult(result: AnalysisResult) {
     ];
 
     if (terminal) {
+      const assistantTraceRecords = result.assistantRunTrace.length
+        ? result.assistantRunTrace.map((trace) => ({
+            analysisRunId: result.analysisRunId,
+            ...trace
+          }))
+        : result.assistantFindings.map((finding) => ({
+            analysisRunId: result.analysisRunId,
+            runId: result.analysisRunId,
+            assistantType: finding.assistantId,
+            status: result.assistantStatus[finding.assistantId],
+            latestContribution: finding.finding,
+            evidenceIds: result.evidencePackages.map((evidence) => evidence.evidencePackageId),
+            dataSourcesUsed: [finding.sourceLabel],
+            warning: finding.risk === "high" ? finding.reason : undefined
+          }));
+      const coordinatorTraceRecord = result.coordinatorTrace
+        ? {
+            analysisRunId: result.analysisRunId,
+            assistantType: "coordinator",
+            ...result.coordinatorTrace
+          }
+        : undefined;
+
       writes.push(
         AssistantRun.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         EvidencePackageModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         Opportunity.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         RecommendationModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
-        ...result.assistantFindings.map((finding) =>
+        ...assistantTraceRecords.map((trace) =>
           AssistantRun.create({
             workspaceId: result.workspaceId,
-            data: {
-              analysisRunId: result.analysisRunId,
-              ...finding
-            }
+            data: trace
           }) as never
         ),
+        ...(coordinatorTraceRecord
+          ? [
+              AssistantRun.create({
+                workspaceId: result.workspaceId,
+                data: coordinatorTraceRecord
+              }) as never
+            ]
+          : []),
         ...result.evidencePackages.map((evidence) =>
           EvidencePackageModel.create({
             workspaceId: result.workspaceId,
@@ -931,7 +965,13 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
   }
 
   function nextUsage(current: AssistantUsage): AssistantUsage {
-    const cost = costs[current.assistantId];
+    const currentWithTrace = current as AssistantUsage & { lastAnalysisRunId?: string; processedAnalysisRunIds?: string[] };
+
+    if (currentWithTrace.lastAnalysisRunId === result.analysisRunId || currentWithTrace.processedAnalysisRunIds?.includes(result.analysisRunId)) {
+      return current;
+    }
+
+    const cost = costs[current.assistantId] ?? 0;
     const contribution = result.executiveRecommendation.assistantContributions.find(
       (item) => item.assistantId === current.assistantId
     );
@@ -951,8 +991,10 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
       lastRun: result.completedAt ?? new Date().toISOString(),
       latestContribution: contribution?.latestContribution ?? fallbackContribution ?? current.latestContribution,
       dataSourcesUsed: contribution?.dataSourcesUsed ?? current.dataSourcesUsed,
-      alertState: calculateAlertState(nextCredits, current.creditLimit)
-    };
+      alertState: calculateAlertState(nextCredits, current.creditLimit),
+      lastAnalysisRunId: result.analysisRunId,
+      processedAnalysisRunIds: [...(currentWithTrace.processedAnalysisRunIds ?? []), result.analysisRunId].slice(-50)
+    } as AssistantUsage;
   }
 
   if (await databaseReady()) {
@@ -1094,8 +1136,8 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
       workspace,
       marketplaceProfile,
       linkedServices: {
-        brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_fallback",
-        connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo fallback",
+        brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_seed",
+        connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo seed",
         lastCredentialCheck: new Date().toISOString()
       },
       credits: credits?.data,
@@ -1111,8 +1153,8 @@ export async function getWorkspaceSnapshot(workspaceId: string) {
     workspace: store.workspaces.find((workspace) => workspace.id === workspaceId),
     marketplaceProfile: store.marketplaceProfiles.find((profile) => profile.workspaceId === workspaceId),
     linkedServices: {
-      brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_fallback",
-      connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo fallback",
+      brightDataStatus: process.env.BRIGHT_DATA_API_KEY ? "connected" : "demo_seed",
+      connectionMode: process.env.BRIGHT_DATA_API_KEY ? "Live when endpoints are configured" : "Demo seed",
       lastCredentialCheck: new Date().toISOString()
     },
     credits: store.workspaceCredits.find((credits) => credits.workspaceId === workspaceId),

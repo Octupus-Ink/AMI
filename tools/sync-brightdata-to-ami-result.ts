@@ -240,9 +240,25 @@ async function main() {
 
     return {
       evidencePackageId,
+      runId: analysisRunId,
       sourceMarketplace: "Amazon",
       sourceType: "marketplace_search_result",
       ...(isValidUrl(sourceUrl) ? { sourceUrl } : {}),
+      sourceProvider: "brightdata" as const,
+      sourceProduct: "Web Scraper API",
+      sourceName: "Amazon Products Search",
+      rawRef: `mongo:analysis_runs/${String(latestBrightDataRun._id)}`,
+      capturedAt: now,
+      mode: "live" as const,
+      extractedFields: {
+        title: cleanText(opportunity.title, "Amazon product", 180),
+        price,
+        currency: opportunity.evidence?.currency,
+        rating: opportunity.evidence?.rating,
+        reviewsCount: opportunity.evidence?.reviewsCount,
+        sourceUrl
+      },
+      assistantTypesUsedBy: ["trend", "competitor", "supplier", "inventory"] as const,
       brightDataProduct: "Web Scraper API" as const,
       brightDataMode: "live" as const,
       sourceMode: "live" as const,
@@ -397,6 +413,87 @@ async function main() {
     ),
     isFallback: false
   }));
+  const sourceSummary = {
+    provider: "brightdata" as const,
+    productsUsed: ["Amazon Products Search"],
+    liveAttempted: true,
+    liveSucceeded: true,
+    fallbackUsed: false,
+    rawSnapshotsSaved: 1,
+    rawSnapshotsLoaded: 0,
+    evidenceItemsCreated: rawOpportunities.length
+  };
+  const rawSnapshotMetadata = [
+    {
+      runId: analysisRunId,
+      sourceProvider: "brightdata" as const,
+      sourceProduct: "Web Scraper API",
+      sourceType: "bright_data_live_web_data",
+      sourceName: "Amazon Products Search",
+      rawRef: `mongo:analysis_runs/${String(latestBrightDataRun._id)}`,
+      capturedAt: now,
+      mode: "live" as const,
+      recordCount: rawOpportunities.length,
+      status: "success" as const
+    }
+  ];
+  const evidenceMetadata = rawOpportunities.map((opportunity) => ({
+    runId: analysisRunId,
+    sourceProvider: "brightdata" as const,
+    sourceProduct: "Web Scraper API",
+    sourceType: "bright_data_live_web_data",
+    sourceName: "Amazon Products Search",
+    ...(isValidUrl(opportunity.evidence?.sourceUrl) ? { sourceUrl: opportunity.evidence.sourceUrl } : {}),
+    rawRef: `mongo:analysis_runs/${String(latestBrightDataRun._id)}`,
+    capturedAt: now,
+    mode: "live" as const,
+    extractedFields: {
+      title: cleanText(opportunity.title, "Amazon product", 180),
+      price: opportunity.evidence?.price,
+      currency: opportunity.evidence?.currency,
+      rating: opportunity.evidence?.rating,
+      reviewsCount: opportunity.evidence?.reviewsCount,
+      sourceUrl: opportunity.evidence?.sourceUrl
+    },
+    assistantTypesUsedBy: ["trend", "competitor", "supplier", "inventory"] as const,
+    confidence: Math.min(1, Math.max(0, (opportunity.scores?.confidenceScore || 65) / 100)),
+    matchScore: clamp(opportunity.scores?.opportunityScore || 0)
+  }));
+  const assistantRunTrace = (["trend", "competitor", "supplier", "inventory"] as const).map((assistantType) => {
+    const finding = assistantFindings.find((item) => item.assistantId === assistantType);
+
+    return {
+      runId: analysisRunId,
+      assistantRunId: `${analysisRunId}:${assistantType}`,
+      assistantType,
+      status: "completed" as const,
+      startedAt: now,
+      completedAt: now,
+      dataSourcesUsed: ["Amazon Products Search", "Bright Data Web Scraper API"],
+      evidenceIds: evidencePackages.map((item) => item.evidencePackageId),
+      latestContribution: finding?.finding,
+      usageEstimate: assistantType === "trend" ? 0.4 : assistantType === "inventory" ? 0.3 : 0.5
+    };
+  });
+  const coordinatorTrace = {
+    runId: analysisRunId,
+    coordinatorRunId: `${analysisRunId}:ami_orchestrator`,
+    coordinatorType: "ami_orchestrator" as const,
+    status: "completed" as const,
+    startedAt: now,
+    completedAt: now,
+    assistantRunIds: assistantRunTrace.map((trace) => trace.assistantRunId),
+    evidenceIds: evidencePackages.map((item) => item.evidencePackageId),
+    finalRecommendationId: recommendations[0].recommendationId,
+    reasoningSummary: "Imported Bright Data marketplace signals were synthesized into AMI's review-ready recommendation.",
+    assistantContributionSummary: Object.fromEntries(
+      assistantRunTrace.map((trace) => [trace.assistantType, trace.latestContribution ?? "Imported assistant trace."])
+    ),
+    confidence: 0.78,
+    riskScore: 50,
+    sourceMode: "live" as const,
+    fallbackUsed: false
+  };
 
   const result = {
     analysisRunId,
@@ -407,6 +504,15 @@ async function main() {
       ? new Date(latestBrightDataRun.startedAt).toISOString()
       : now,
     completedAt: now,
+    sourceMode: "live" as const,
+    fallbackUsed: false,
+    sourceProvider: "brightdata" as const,
+    sourceProducts: ["Amazon Products Search"],
+    sourceSummary,
+    rawSnapshotMetadata,
+    evidenceMetadata,
+    assistantRunTrace,
+    coordinatorTrace,
     assistantStatus: {
       trend: "completed" as const,
       competitor: "completed" as const,
@@ -462,20 +568,42 @@ async function main() {
     }),
     AssistantRun.deleteMany({
       workspaceId,
-      "data.sourceLabel": {
-        $in: ["Bright Data Amazon Search", "Amazon demand signals", "Supplier validation pending", "Demo inventory context", "AMI risk rubric"]
-      }
+      $or: [
+        { "data.analysisRunId": analysisRunId },
+        {
+          "data.sourceLabel": {
+            $in: ["Bright Data Amazon Search", "Amazon demand signals", "Supplier validation pending", "Demo inventory context", "AMI risk rubric"]
+          }
+        }
+      ]
     }),
-    RawSourceSnapshot.deleteMany({ workspaceId, "data.label": "Bright Data Amazon Search raw import" })
+    RawSourceSnapshot.deleteMany({
+      workspaceId,
+      $or: [{ "data.analysisRunId": analysisRunId }, { "data.label": "Bright Data Amazon Search raw import" }]
+    })
   ]);
 
   await Promise.all([
     AnalysisRun.create({ workspaceId, data: result }),
-    ...assistantFindings.map((finding) => AssistantRun.create({ workspaceId, data: finding })),
+    ...assistantRunTrace.map((trace) => AssistantRun.create({ workspaceId, data: { analysisRunId, ...trace } })),
+    AssistantRun.create({ workspaceId, data: { analysisRunId, assistantType: "coordinator", ...coordinatorTrace } }),
     ...evidencePackages.map((evidence) => EvidencePackageModel.create({ workspaceId, data: evidence })),
     ...recommendations.map((recommendation) => AppOpportunity.create({ workspaceId, data: recommendation })),
     ...recommendations.map((recommendation) => RecommendationModel.create({ workspaceId, data: recommendation })),
-    RawSourceSnapshot.create({ workspaceId, data: result.sourceCollectionStatus })
+    RawSourceSnapshot.create({
+      workspaceId,
+      data: {
+        analysisRunId,
+        runId: analysisRunId,
+        sourceMode: "live",
+        sourceProvider: "brightdata",
+        sourceProducts: ["Amazon Products Search"],
+        sourceSummary,
+        rawSnapshotMetadata,
+        evidenceMetadata,
+        sourceCollectionStatus: result.sourceCollectionStatus
+      }
+    })
   ]);
 
   const usageRows = [

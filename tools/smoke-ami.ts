@@ -89,6 +89,10 @@ async function brightDataSmoke() {
   console.log(`Bright Data provider status: ${result.status}`);
   console.log(`Bright Data product: ${result.brightDataProduct}`);
   console.log(`Used fallback: ${yesNo(result.usedFallback)}`);
+  console.log(`Fallback kind: ${result.fallbackKind}`);
+  console.log(`Source provider: ${result.sourceProvider}`);
+  console.log(`Source products: ${result.sourceProducts.join(", ") || "none"}`);
+  console.log(`Raw snapshots loaded: ${result.rawSnapshotsLoaded}`);
   console.log(`Products returned: ${result.products.length}`);
   console.log(`Max cap respected: ${yesNo(result.products.length <= getBrightDataConfig().maxResults && result.products.length <= 5)}`);
 
@@ -105,6 +109,7 @@ async function analysisSmoke() {
 
   console.log(`Analysis run created: ${yesNo(Boolean(result.analysisRunId))}`);
   console.log(`Final status: ${result.status}`);
+  console.log(`Source mode: ${result.sourceMode}`);
   console.log(`Bright Data attempted first: ${yesNo(Boolean(result.sourceCollectionStatus.providerStatus))}`);
   console.log(`Products analyzed: ${result.normalizedProducts.length}`);
   console.log(`Product cap respected: ${yesNo(result.normalizedProducts.length <= 5)}`);
@@ -135,8 +140,9 @@ async function fallbackSmoke() {
       available: false
     });
 
-    console.log(`Fallback status: ${result.status}`);
-    console.log(`Fallback used: ${yesNo(result.usedFallback)}`);
+  console.log(`Fallback status: ${result.status}`);
+  console.log(`Source mode: ${result.sourceMode}`);
+  console.log(`Fallback used: ${yesNo(result.usedFallback)}`);
     console.log(`Fallback reason present: ${yesNo(Boolean(result.fallbackReason || result.warnings[0]))}`);
     console.log(`UI-safe graph data: ${yesNo(Boolean(result.graphData))}`);
     console.log(`UI-safe verdict: ${yesNo(Boolean(result.finalVerdict))}`);

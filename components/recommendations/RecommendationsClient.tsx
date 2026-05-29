@@ -12,7 +12,7 @@ import {
 import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
-import { normalizeVisibleEvidenceItems, resolveSourceState, sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
+import { resolveSourceState, sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
 import type { AnalysisResult, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
 
@@ -31,12 +31,24 @@ function formatMode(mode: SourceMode | string) {
     return "Pending";
   }
 
+  if (mode === "live") {
+    return "Live Bright Data data";
+  }
+
+  if (mode === "fallback_snapshot") {
+    return "Fallback snapshot";
+  }
+
+  if (mode === "demo_seed") {
+    return "Demo seed";
+  }
+
   if (mode === "demo_fallback" || mode === "demo_snapshot") {
-    return "Demo fallback";
+    return "Demo seed";
   }
 
   if (mode === "mixed") {
-    return "Mixed";
+    return "Fallback snapshot";
   }
 
   if (mode === "error" || mode === "not_configured") {
@@ -51,68 +63,16 @@ function formatMode(mode: SourceMode | string) {
 
 function sourceStateForAnalysis(analysis: AnalysisResult) {
   return resolveSourceState({
-    mode: analysis.sourceCollectionStatus.mode,
+    mode: analysis.sourceMode ?? analysis.sourceCollectionStatus.mode,
     providerStatus: analysis.sourceCollectionStatus.providerStatus,
-    usedFallback: analysis.sourceCollectionStatus.usedFallback,
-    fallbackUsed: analysis.sourceCollectionStatus.fallbackUsed,
+    usedFallback: analysis.fallbackUsed ?? analysis.sourceCollectionStatus.usedFallback,
+    fallbackUsed: analysis.fallbackUsed ?? analysis.sourceCollectionStatus.fallbackUsed,
     demoSnapshotUsed: analysis.sourceCollectionStatus.demoSnapshotUsed,
     liveProviderUsed: analysis.sourceCollectionStatus.liveProviderUsed,
     products: analysis.normalizedProducts,
     evidenceRefs: analysis.evidenceRefs,
     sourceProof: analysis.sourceCollectionStatus.sourceProof
   });
-}
-
-function providerStatusLabel(status: string) {
-  if (status === "live_success" || status === "live") {
-    return "Provider live";
-  }
-
-  if (status === "fallback_used" || status === "fallback") {
-    return "Fallback used";
-  }
-
-  if (status === "partial_fallback") {
-    return "Partial fallback used";
-  }
-
-  if (status === "failed" || status === "error" || status === "not_configured") {
-    return "Provider failed";
-  }
-
-  return "Checking provider";
-}
-
-function providerBadgeTone(status: string): "green" | "amber" | "red" {
-  if (status === "live_success" || status === "live") {
-    return "green";
-  }
-
-  if (status === "failed" || status === "error" || status === "not_configured") {
-    return "red";
-  }
-
-  return "amber";
-}
-
-function sourceTypeLabel(sourceType: string) {
-  if (sourceType === "brightdata") {
-    return "Bright Data";
-  }
-
-  if (sourceType === "demo_fallback") {
-    return "Demo fallback";
-  }
-
-  if (sourceType === "provider") {
-    return "Provider";
-  }
-
-  if (sourceType === "manual") {
-    return "Manual";
-  }
-
-  return "Unknown";
 }
 
 function safeDisplay(value: string, maxLength = 520) {
