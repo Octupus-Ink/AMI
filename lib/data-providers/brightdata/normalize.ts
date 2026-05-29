@@ -7,11 +7,11 @@ import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle, toHttpSourceUrl } from 
 import type { BrightDataPayloadContext, BrightDataProduct } from "@/lib/data-providers/brightdata/types";
 
 const PRODUCT_ARRAY_KEYS = ["products", "results", "items", "data", "records", "organic", "shopping_results"];
-const PRICE_KEYS = ["price", "price_usd", "currentPrice", "current_price", "final_price", "sale_price", "value"];
-const TITLE_KEYS = ["title", "name", "product_title", "productName", "product_name"];
+const PRICE_KEYS = ["price", "price_usd", "currentPrice", "current_price", "final_price", "initial_price", "sale_price", "value"];
+const TITLE_KEYS = ["title", "name", "product_title", "productName", "product_name", "item_title"];
 const URL_KEYS = ["url", "link", "product_url", "sourceUrl"];
 const RATING_KEYS = ["rating", "stars", "average_rating"];
-const REVIEWS_KEYS = ["reviews", "reviewsCount", "reviews_count", "ratings_count"];
+const REVIEWS_KEYS = ["reviews", "reviewsCount", "reviews_count", "ratings_count", "num_ratings", "review_count"];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -159,8 +159,8 @@ function normalizeRecord(
     rating,
     reviewsCount: reviewsCount ? Math.round(reviewsCount) : undefined,
     availability: findString(record, ["availability", "stockStatus", "stock_status"]) ?? "unknown",
-    imageUrl: findString(record, ["image", "imageUrl", "image_url", "thumbnail"]),
-    supplierName: findString(record, ["supplier", "seller", "merchant"]) ?? context.supplierSource,
+    imageUrl: findString(record, ["image", "imageUrl", "image_url", "thumbnail", "main_image"]),
+    supplierName: findString(record, ["supplier", "seller", "merchant", "seller_name", "shop_name"]) ?? context.supplierSource,
     supplierPrice: estimatedSupplierPrice,
     estimatedDeliveryTime: findString(record, ["delivery", "deliveryEstimate", "shipping_time"]) ?? "Validation required",
     deliveryCostNote: findString(record, ["shipping", "delivery_cost", "deliveryCostNote"]),

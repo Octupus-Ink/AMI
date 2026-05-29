@@ -64,17 +64,29 @@ const processingMessages = [
   "Preparing AMI Strategy"
 ];
 
-function formatMode(mode: SourceMode) {
+function formatMode(mode: SourceMode | string) {
   if (mode === "pending") {
     return "Pending";
   }
 
+  if (mode === "live") {
+    return "Live Bright Data data";
+  }
+
+  if (mode === "fallback_snapshot") {
+    return "Fallback snapshot";
+  }
+
+  if (mode === "demo_seed") {
+    return "Demo seed";
+  }
+
   if (mode === "demo_fallback" || mode === "demo_snapshot") {
-    return "Demo fallback";
+    return "Demo seed";
   }
 
   if (mode === "mixed") {
-    return "Mixed";
+    return "Fallback snapshot";
   }
 
   if (mode === "error" || mode === "not_configured") {
@@ -256,7 +268,7 @@ export function ProcessingClient() {
         ...current,
         ...Object.fromEntries(statusRows.map((row) => [row.agentType, row.latestActivity ?? assistantSeedActivity(row.agentType)]))
       }));
-      setSourceMode(result.sourceCollectionStatus?.mode ?? "pending");
+      setSourceMode(result.sourceMode ?? result.sourceCollectionStatus?.mode ?? "pending");
       setSourceStatus(result.sourceCollectionStatus?.label ?? result.sourceCollectionStatus?.sourceLabel ?? "Source collection completed");
       setLatestResult(result);
 

@@ -8,7 +8,7 @@ export async function GET() {
     stack: "Next.js App Router, TypeScript, Zod, Mongoose",
     mongoConfigured: hasMongoUri(),
     brightDataConfigured: Boolean(process.env.BRIGHT_DATA_API_KEY),
-    brightDataMode: process.env.BRIGHT_DATA_API_KEY ? "live_when_endpoints_are_configured" : "demo_fallback",
+    brightDataMode: process.env.BRIGHT_DATA_API_KEY ? "live_when_endpoints_are_configured" : "demo_seed",
     visibleAssistants: VisibleAssistants.map((assistant) => assistant.name)
   });
 }

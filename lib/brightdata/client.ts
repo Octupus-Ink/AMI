@@ -1,6 +1,6 @@
 import { demoCompetitorSnapshot, demoSerpResults } from "@/lib/demo/data";
 
-export type BrightDataMode = "live" | "demo_fallback";
+export type BrightDataMode = "live" | "demo_seed";
 
 export type BrightDataResponse<T> = {
   mode: BrightDataMode;
@@ -48,10 +48,10 @@ async function brightDataFetch<T>(
 export async function searchSERP(query: string): Promise<BrightDataResponse<typeof demoSerpResults>> {
   if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_SERP_ENDPOINT) {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "SERP API",
       data: demoSerpResults,
-      message: "Bright Data SERP API is represented with a seeded demo fallback because live credentials are not configured."
+      message: "Bright Data SERP API is represented with a deterministic demo seed because live credentials are not configured."
     };
   }
 
@@ -62,10 +62,10 @@ export async function searchSERP(query: string): Promise<BrightDataResponse<type
     });
   } catch {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "SERP API",
       data: demoSerpResults,
-      message: "Bright Data SERP API live request failed, so AMI used the seeded demo fallback."
+      message: "Bright Data SERP API live request failed, so AMI used the demo seed."
     };
   }
 }
@@ -73,10 +73,10 @@ export async function searchSERP(query: string): Promise<BrightDataResponse<type
 export async function scrapeProductPage(url: string): Promise<BrightDataResponse<typeof demoCompetitorSnapshot>> {
   if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_WEB_SCRAPER_ENDPOINT) {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "Web Scraper API",
       data: demoCompetitorSnapshot,
-      message: "Bright Data Web Scraper API is represented with a seeded demo fallback because live credentials are not configured."
+      message: "Bright Data Web Scraper API is represented with a deterministic demo seed because live credentials are not configured."
     };
   }
 
@@ -87,10 +87,10 @@ export async function scrapeProductPage(url: string): Promise<BrightDataResponse
     });
   } catch {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "Web Scraper API",
       data: demoCompetitorSnapshot,
-      message: "Bright Data Web Scraper API live request failed, so AMI used the seeded demo fallback."
+      message: "Bright Data Web Scraper API live request failed, so AMI used the demo seed."
     };
   }
 }
@@ -98,10 +98,10 @@ export async function scrapeProductPage(url: string): Promise<BrightDataResponse
 export async function unlockUrl(url: string): Promise<BrightDataResponse<{ url: string; html?: string }>> {
   if (!hasBrightDataCredentials() || !process.env.BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT) {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "Web Unlocker",
       data: { url },
-      message: "Bright Data Web Unlocker is represented with a demo fallback because live credentials are not configured."
+      message: "Bright Data Web Unlocker is represented with a demo seed because live credentials are not configured."
     };
   }
 
@@ -111,10 +111,10 @@ export async function unlockUrl(url: string): Promise<BrightDataResponse<{ url: 
     });
   } catch {
     return {
-      mode: "demo_fallback",
+      mode: "demo_seed",
       product: "Web Unlocker",
       data: { url },
-      message: "Bright Data Web Unlocker live request failed, so AMI used the demo fallback."
+      message: "Bright Data Web Unlocker live request failed, so AMI used the demo seed."
     };
   }
 }

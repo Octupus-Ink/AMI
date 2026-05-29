@@ -17,7 +17,7 @@ type SourceStateInput = {
 };
 
 export type ResolvedSourceState = {
-  mode: Extract<SourceMode, "pending" | "live" | "demo_fallback" | "mixed" | "error">;
+  mode: Extract<SourceMode, "pending" | "live" | "fallback_snapshot" | "demo_seed" | "demo_fallback" | "mixed" | "error">;
   providerStatus: ResolvedProviderStatus;
   fallbackUsed: boolean;
   demoSnapshotUsed: boolean;
@@ -57,6 +57,8 @@ function normalizeStoredMode(value: unknown): SourceMode | undefined {
   if (
     mode === "pending" ||
     mode === "live" ||
+    mode === "fallback_snapshot" ||
+    mode === "demo_seed" ||
     mode === "demo_fallback" ||
     mode === "mixed" ||
     mode === "error" ||
@@ -83,6 +85,8 @@ export function resolveSourceState(input: SourceStateInput): ResolvedSourceState
   const proofFallbackCount = sourceProof.filter((item) => item.isFallback).length;
   const proofLiveCount = sourceProof.filter((item) => !item.isFallback).length;
   const inferredFallbackUsed =
+    storedMode === "fallback_snapshot" ||
+    storedMode === "demo_seed" ||
     storedMode === "demo_fallback" ||
     storedMode === "demo_snapshot" ||
     providerStatus === "fallback_used" ||
@@ -98,6 +102,32 @@ export function resolveSourceState(input: SourceStateInput): ResolvedSourceState
     liveEvidenceCount > 0 ||
     proofLiveCount > 0;
   const liveProviderUsed = explicitLiveProviderUsed === true || inferredLiveProviderUsed;
+
+  if (storedMode === "fallback_snapshot") {
+    return {
+      mode: "fallback_snapshot",
+      providerStatus: "fallback_used",
+      fallbackUsed: true,
+      demoSnapshotUsed: false,
+      liveProviderUsed: false,
+      sourceLabel: "Fallback snapshot",
+      liveRecordCount: 0,
+      fallbackRecordCount: fallbackEvidenceCount || proofFallbackCount || productCount
+    };
+  }
+
+  if (storedMode === "demo_seed") {
+    return {
+      mode: "demo_seed",
+      providerStatus: "fallback_used",
+      fallbackUsed: true,
+      demoSnapshotUsed: true,
+      liveProviderUsed: false,
+      sourceLabel: "Demo seed",
+      liveRecordCount: 0,
+      fallbackRecordCount: fallbackEvidenceCount || proofFallbackCount || productCount
+    };
+  }
 
   if (fallbackUsed && liveProviderUsed) {
     return {
@@ -119,7 +149,7 @@ export function resolveSourceState(input: SourceStateInput): ResolvedSourceState
       fallbackUsed: true,
       demoSnapshotUsed: true,
       liveProviderUsed: false,
-      sourceLabel: "Demo fallback",
+      sourceLabel: "Demo seed",
       liveRecordCount: 0,
       fallbackRecordCount: fallbackEvidenceCount || proofFallbackCount || productCount
     };
@@ -279,6 +309,14 @@ function sourceTypeForEvidence(provider: unknown, sourceType: unknown): SourcePr
 function proofModeFor(mode: ResolvedSourceState["mode"], isFallback: boolean): SourceProofItem["sourceMode"] {
   if (mode === "mixed") {
     return "mixed";
+  }
+
+  if (mode === "fallback_snapshot") {
+    return "fallback_snapshot";
+  }
+
+  if (mode === "demo_seed") {
+    return "demo_seed";
   }
 
   return isFallback ? "demo_fallback" : "live";

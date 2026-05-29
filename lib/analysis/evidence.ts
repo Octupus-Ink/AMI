@@ -1,7 +1,23 @@
-import type { EvidencePackage, MarketContextPayload, NormalizedProduct, SourceMode } from "@/lib/schemas/ami";
+import type { EvidencePackage, MarketContextPayload, NormalizedProduct, NormalizedSourceMode, SourceMode, SourceProvider } from "@/lib/schemas/ami";
 import { EvidencePackageSchema } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import { sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
+import { extractedProductFields, isSourceFallbackMode } from "@/lib/analysis/source-trace";
+
+type EvidenceTraceOptions = {
+  runId?: string;
+  sourceProvider?: SourceProvider;
+  sourceProduct?: string;
+  sourceName?: string;
+  targetMarketplace?: string;
+  scraperName?: string;
+  datasetId?: string;
+  operation?: string;
+  snapshotId?: string;
+  rawRef?: string;
+  mode?: NormalizedSourceMode;
+  assistantTypesUsedBy?: Array<"trend" | "competitor" | "supplier" | "inventory">;
+};
 
 function confidenceLabel(value: number | undefined): "low" | "medium" | "high" {
   if ((value ?? 0) >= 0.78) {
@@ -39,24 +55,34 @@ function competitionLevel(value: number | undefined): "low" | "moderate" | "high
   return "low";
 }
 
+function normalizedEvidenceMode(mode: SourceMode, override?: NormalizedSourceMode): NormalizedSourceMode {
+  if (override) {
+    return override;
+  }
+
+  return mode === "live" ? "live" : isSourceFallbackMode(mode) ? "fallback_snapshot" : "demo_seed";
+}
+
 export function buildEvidencePackages(
   context: MarketContextPayload,
   products: NormalizedProduct[],
   evidenceRefs: EvidenceRef[],
   mode: SourceMode,
   brightDataProduct: EvidencePackage["brightDataProduct"],
-  scrapedAt: string
+  scrapedAt: string,
+  trace: EvidenceTraceOptions = {}
 ): EvidencePackage[] {
   const primary = products[0];
   const primaryRef = evidenceRefs.find((ref) => primary?.evidenceRefs.includes(ref.id)) ?? evidenceRefs[0];
   const sourceUrl = toHttpSourceUrl(primaryRef?.url);
-  const isFallback = mode === "demo_fallback" || mode === "demo_snapshot" || mode === "mixed";
+  const normalizedMode = normalizedEvidenceMode(mode, trace.mode);
+  const isFallback = normalizedMode !== "live";
   const sourceType =
-    mode === "live"
+    normalizedMode === "live"
       ? "bright_data_live_web_data"
-      : mode === "error" || mode === "not_configured"
-        ? "provider_unavailable"
-        : "bright_data_demo_fallback_snapshot";
+      : normalizedMode === "fallback_snapshot"
+        ? "bright_data_preserved_raw_snapshot"
+        : "demo_seed";
   const demandIndicators = evidenceRefs
     .slice(0, 3)
     .map((ref) => sanitizeEvidenceSnippet(ref.snippet ?? ref.label, 180))
@@ -65,12 +91,36 @@ export function buildEvidencePackages(
   return [
     EvidencePackageSchema.parse({
       evidencePackageId: primaryRef?.id ?? `evidence_${scrapedAt}`,
+      ...(trace.runId ? { runId: trace.runId } : {}),
       sourceMarketplace: context.targetMarketplace,
       sourceType,
       ...(sourceUrl ? { sourceUrl } : {}),
+      sourceProvider: trace.sourceProvider ?? (normalizedMode === "demo_seed" ? "demo" : "brightdata"),
+      sourceProduct: trace.sourceProduct ?? brightDataProduct,
+      sourceName: trace.sourceName ?? trace.sourceProduct ?? brightDataProduct,
+      targetMarketplace: trace.targetMarketplace ?? context.targetMarketplace,
+      scraperName: trace.scraperName,
+      datasetId: trace.datasetId,
+      operation: trace.operation,
+      snapshotId: trace.snapshotId,
+      ...(sourceUrl ? { productUrl: sourceUrl } : {}),
+      ...(primary?.imageUrl ? { imageUrl: primary.imageUrl } : {}),
+      title: primary?.title ?? context.productName,
+      price: primary?.priceUsd ?? primary?.price,
+      currency: primary?.currency ?? context.currency,
+      rating: primary?.rating,
+      reviewsCount: primary?.reviewsCount,
+      availability: primary?.availability,
+      sellerName: primary?.supplierName,
+      category: primary?.category,
+      ...(trace.rawRef ? { rawRef: trace.rawRef } : {}),
+      capturedAt: scrapedAt,
+      mode: normalizedMode,
+      extractedFields: extractedProductFields(primary as Record<string, unknown> | undefined),
+      assistantTypesUsedBy: trace.assistantTypesUsedBy ?? ["trend", "competitor", "supplier", "inventory"],
       brightDataProduct,
-      brightDataMode: mode,
-      sourceMode: mode,
+      brightDataMode: normalizedMode,
+      sourceMode: normalizedMode,
       isFallback,
       scrapedAt,
       productIdentity: primary?.title ?? context.productName,

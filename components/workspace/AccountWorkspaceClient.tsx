@@ -447,7 +447,7 @@ export function AccountWorkspaceClient() {
           <Panel icon={<LinkIcon size={20} />} title="Linked services">
             <div className="flex flex-wrap gap-3">
               <Fact label="Bright Data status" value={formatStatus(snapshot.linkedServices?.brightDataStatus)} />
-              <Fact label="Connection mode" value={snapshot.linkedServices?.connectionMode ?? "Demo fallback"} />
+              <Fact label="Connection mode" value={snapshot.linkedServices?.connectionMode ?? "Demo seed"} />
               <Fact
                 label="Last credential check"
                 value={

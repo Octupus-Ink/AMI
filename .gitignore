@@ -16,3 +16,7 @@ tsconfig.tsbuildinfo
 # Runtime uploads
 /storage/uploads/*
 !/storage/uploads/.gitkeep
+
+# Local AMI run artifacts
+data/ami-runs/**
+!data/ami-runs/.gitkeep

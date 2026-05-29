@@ -17,6 +17,7 @@ const initialContext: MarketContextPayload = {
   currency: "USD",
   useInventoryContext: false
 };
+const targetMarketplaceOptions = ["Amazon", "eBay", "AliExpress", "Alibaba", "TikTok Shop"];
 
 type InventoryStatus = {
   connected?: boolean;
@@ -169,7 +170,13 @@ export function MarketContextClient() {
               label="Target marketplace"
               value={form.targetMarketplace}
               onChange={(value) => updateForm({ targetMarketplace: value })}
+              listId="target-marketplace-options"
             />
+            <datalist id="target-marketplace-options">
+              {targetMarketplaceOptions.map((marketplace) => (
+                <option key={marketplace} value={marketplace} />
+              ))}
+            </datalist>
             <Field label="Supplier source" value={form.supplierSource} onChange={(value) => updateForm({ supplierSource: value })} />
             <label className="block min-w-64 flex-1">
               <span className="text-xs font-semibold uppercase text-slate-500">Business goal</span>
@@ -212,11 +219,13 @@ export function MarketContextClient() {
 function Field({
   label,
   value,
-  onChange
+  onChange,
+  listId
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  listId?: string;
 }) {
   return (
     <label className="block min-w-64 flex-1">
@@ -224,6 +233,7 @@ function Field({
       <input
         required
         value={value}
+        list={listId}
         onChange={(event) => onChange(event.target.value)}
         className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
       />
