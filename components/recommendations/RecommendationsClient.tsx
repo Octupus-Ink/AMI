@@ -191,7 +191,17 @@ type SupplierDrawerDetail = {
   riskInputs?: string[];
 };
 
+type SupplierCandidateProductRow = {
+  productName: string;
+  unitCost: string;
+  delivery: string;
+  matchQuality: string;
+};
+
 const inventoryTitleMaxLength = 72;
+
+const supplierDeliveryCostFallback =
+  "Not included.\nDelivery is usually quoted by batch, volume, destination, and supplier terms.\nContact the provider to confirm shipping terms.";
 
 type PromoMetaInput = {
   assistantId?: string;
@@ -606,6 +616,70 @@ function formatDeliveryBatch(delivery: string | undefined) {
   return delivery;
 }
 
+function formatMatchQualityLabel(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatCandidateUnitCost(evidence: EvidencePackage | undefined, supplier: SupplierOption) {
+  if (evidence?.supplierPrice !== undefined) {
+    return `$${evidence.supplierPrice.toFixed(2)}`;
+  }
+
+  return `$${supplier.estimatedUnitCost.toFixed(2)}`;
+}
+
+function resolveCandidateMatchQuality(
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  evidence: EvidencePackage | undefined
+) {
+  if (opportunity?.matchQuality) {
+    return formatMatchQualityLabel(opportunity.matchQuality);
+  }
+
+  if (evidence?.matchQuality) {
+    return formatMatchQualityLabel(evidence.matchQuality);
+  }
+
+  return "Analysis-level";
+}
+
+function getDrawerCandidateProductRows(
+  productRows: PreviewRowData[],
+  selectedProductIds: Set<string>,
+  supplier: SupplierOption,
+  analysis: AnalysisResult
+): SupplierCandidateProductRow[] {
+  const visibleRows =
+    selectedProductIds.size > 0 ? productRows.filter((row) => selectedProductIds.has(row.id)) : productRows;
+
+  return visibleRows.map((row) => {
+    const recommendationId = row.id.replace(/^product-/, "");
+    const opportunity = analysis.opportunities.find((item) => item.recommendationId === recommendationId);
+    const evidence = opportunity
+      ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+      : undefined;
+
+    return {
+      productName: row.title,
+      unitCost: formatCandidateUnitCost(evidence, supplier),
+      delivery: formatDeliveryBatch(supplier.estimatedDeliveryTime),
+      matchQuality: resolveCandidateMatchQuality(opportunity, evidence)
+    };
+  });
+}
+
+function resolveSupplierDeliveryCost(analysis: AnalysisResult, supplier: SupplierOption) {
+  const matchedProduct = analysis.normalizedProducts?.find(
+    (product) => product.supplierName === supplier.supplierName && product.deliveryCostNote?.trim()
+  );
+
+  if (matchedProduct?.deliveryCostNote) {
+    return matchedProduct.deliveryCostNote;
+  }
+
+  return supplierDeliveryCostFallback;
+}
+
 function resolveSupplierDrawerDetail(
   supplier: SupplierOption,
   analysis: AnalysisResult,
@@ -1018,6 +1092,9 @@ function ActiveTabContent({
           <SupplierDetailDrawer
             detail={supplierDrawer}
             isSelected={selectedSupplierIds.has(supplierDrawer.supplierId)}
+            productRows={productRows}
+            selectedProductIds={selectedProductIds}
+            analysis={analysis}
             onClose={() => setSupplierDrawer(null)}
           />
         )}
@@ -1553,18 +1630,54 @@ function SupplierComparisonTable({
   );
 }
 
+function SupplierCandidateProductsTable({ rows }: { rows: SupplierCandidateProductRow[] }) {
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+        <thead>
+          <tr className="text-xs uppercase text-slate-500">
+            {["Product", "Unit cost", "Delivery", "Match quality"].map((header) => (
+              <th key={header} className="border-b border-slate-200 px-2 py-2 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.productName}-${index}`}>
+              <td className="border-b border-slate-100 px-2 py-2 font-medium text-slate-950">{row.productName}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.unitCost}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.delivery}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.matchQuality}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function SupplierDetailDrawer({
   detail,
   isSelected,
+  productRows,
+  selectedProductIds,
+  analysis,
   onClose
 }: {
   detail: SupplierDrawerDetail;
   isSelected: boolean;
+  productRows: PreviewRowData[];
+  selectedProductIds: Set<string>;
+  analysis: AnalysisResult;
   onClose: () => void;
 }) {
   useDrawerLock(onClose);
 
   const { supplier } = detail;
+  const candidateRows = getDrawerCandidateProductRows(productRows, selectedProductIds, supplier, analysis);
+  const deliveryCostCopy = resolveSupplierDeliveryCost(analysis, supplier);
   const riskNotes =
     detail.riskInputs && detail.riskInputs.length > 0
       ? detail.riskInputs.join(", ")
@@ -1618,6 +1731,27 @@ function SupplierDetailDrawer({
                 <DrawerField label="Supplier price" value={`$${detail.supplierPrice.toFixed(2)}`} />
               )}
             </dl>
+          </section>
+
+          <section className="mt-6 border-t border-slate-100 pt-5">
+            <h4 className="text-sm font-semibold text-slate-950">Candidate Products — {candidateRows.length}</h4>
+            {candidateRows.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-600">
+                No candidate products are available for this supplier context yet.
+              </p>
+            ) : (
+              <>
+                <SupplierCandidateProductsTable rows={candidateRows} />
+                <p className="mt-3 text-xs leading-5 text-slate-600">
+                  Unit cost and delivery are based on available supplier-level estimates and should be confirmed per
+                  product before purchase.
+                </p>
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-500">Delivery cost</p>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{deliveryCostCopy}</p>
+                </div>
+              </>
+            )}
           </section>
 
           <section className="mt-6 border-t border-slate-100 pt-5">
