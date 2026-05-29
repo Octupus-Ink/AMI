@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { INVENTORY_CONTEXT_UNAVAILABLE_WARNING, runAmiAnalysis } from "@/lib/ami/analysis";
+import { completeAnalysisRun, createAnalysisRunToMetrics, INVENTORY_CONTEXT_UNAVAILABLE_WARNING } from "@/lib/ami/analysis";
 import { MarketContextPayloadSchema } from "@/lib/schemas/ami";
 import { getInventorySourceState, isUsableInventorySource, saveAnalysisResult } from "@/lib/services/ami-store";
 import { jsonError, requireSession } from "@/lib/services/http";
@@ -32,13 +32,51 @@ export async function POST(request: NextRequest) {
   const inventoryRequested = parsed.data.useInventoryContext || inventoryRequired;
   const inventoryWarning =
     inventoryOptional && inventoryRequested && !inventoryAvailable ? INVENTORY_CONTEXT_UNAVAILABLE_WARNING : undefined;
-  const result = await runAmiAnalysis(bundle.workspaceId, { ...parsed.data, useInventoryContext: inventoryRequested }, {
+  const metricsReady = await createAnalysisRunToMetrics(bundle.workspaceId, { ...parsed.data, useInventoryContext: inventoryRequested }, {
     requested: inventoryRequested,
     available: inventoryRequested && inventoryAvailable,
     warningMessage: inventoryWarning,
     sourceLabel: inventoryStatus.latestConnectionLabel
   });
-  await saveAnalysisResult(result);
+  await saveAnalysisResult(metricsReady);
 
-  return NextResponse.json(result);
+  if (metricsReady.status !== "failed") {
+    void (async () => {
+      try {
+        await saveAnalysisResult({
+          ...metricsReady,
+          status: "agents_running",
+          agentStatus: metricsReady.agentStatus.map((entry) => ({
+            ...entry,
+            status:
+              entry.agentType === "trend" ||
+              entry.agentType === "competitor" ||
+              entry.agentType === "supplier" ||
+              entry.agentType === "inventory"
+                ? "running"
+                : "pending",
+            latestActivity:
+              entry.agentType === "trend" ||
+              entry.agentType === "competitor" ||
+              entry.agentType === "supplier" ||
+              entry.agentType === "inventory"
+                ? "Running deterministic specialist analysis on compact KPIs."
+                : entry.latestActivity
+          }))
+        });
+        const completed = await completeAnalysisRun(metricsReady);
+        await saveAnalysisResult(completed);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "AMI analysis failed during AI synthesis.";
+        await saveAnalysisResult({
+          ...metricsReady,
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          warnings: [...metricsReady.warnings, message]
+        });
+      }
+    })();
+  }
+
+  return NextResponse.json(metricsReady);
 }

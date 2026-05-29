@@ -780,48 +780,89 @@ export async function createMarketContext(workspaceId: string, data: MarketConte
 }
 
 export async function saveAnalysisResult(result: AnalysisResult) {
+  const terminal = result.status === "completed" || result.status === "completed_with_fallback" || result.status === "failed";
+
   if (await databaseReady()) {
-    await Promise.all([
-      AnalysisRun.create({
-        workspaceId: result.workspaceId,
-        data: result
-      }),
-      ...result.assistantFindings.map((finding) =>
-        AssistantRun.create({
+    const writes = [
+      AnalysisRun.findOneAndUpdate(
+        {
           workspaceId: result.workspaceId,
-          data: finding
-        })
-      ),
-      ...result.evidencePackages.map((evidence) =>
-        EvidencePackageModel.create({
+          "data.analysisRunId": result.analysisRunId
+        },
+        {
           workspaceId: result.workspaceId,
-          data: evidence
-        })
+          data: result
+        },
+        { upsert: true, new: true }
       ),
-      ...result.opportunities.map((opportunity) =>
-        Opportunity.create({
+      RawSourceSnapshot.findOneAndUpdate(
+        {
           workspaceId: result.workspaceId,
-          data: opportunity
-        })
-      ),
-      ...result.opportunities.map((recommendation) =>
-        RecommendationModel.create({
+          "data.analysisRunId": result.analysisRunId
+        },
+        {
           workspaceId: result.workspaceId,
-          data: recommendation
-        })
-      ),
-      RawSourceSnapshot.create({
-        workspaceId: result.workspaceId,
-        data: result.sourceCollectionStatus
-      })
-    ]);
+          data: {
+            analysisRunId: result.analysisRunId,
+            sourceCollectionStatus: result.sourceCollectionStatus,
+            evidenceRefs: result.evidenceRefs,
+            normalizedProductCount: result.normalizedProducts.length
+          }
+        },
+        { upsert: true, new: true }
+      )
+    ];
+
+    if (terminal) {
+      writes.push(
+        AssistantRun.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        EvidencePackageModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        Opportunity.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        RecommendationModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        ...result.assistantFindings.map((finding) =>
+          AssistantRun.create({
+            workspaceId: result.workspaceId,
+            data: {
+              analysisRunId: result.analysisRunId,
+              ...finding
+            }
+          }) as never
+        ),
+        ...result.evidencePackages.map((evidence) =>
+          EvidencePackageModel.create({
+            workspaceId: result.workspaceId,
+            data: {
+              analysisRunId: result.analysisRunId,
+              ...evidence
+            }
+          }) as never
+        ),
+        ...result.opportunities.map((opportunity) =>
+          Opportunity.create({
+            workspaceId: result.workspaceId,
+            data: opportunity
+          }) as never
+        ),
+        ...result.opportunities.map((recommendation) =>
+          RecommendationModel.create({
+            workspaceId: result.workspaceId,
+            data: recommendation
+          }) as never
+        )
+      );
+    }
+
+    await Promise.all(writes);
   } else {
     const store = getDemoStore();
     store.analysisResults = store.analysisResults.filter((existing) => existing.analysisRunId !== result.analysisRunId);
     store.analysisResults.push(result);
   }
 
-  await updateAssistantUsageAfterRun(result.workspaceId, result);
+  if (terminal) {
+    await updateAssistantUsageAfterRun(result.workspaceId, result);
+  }
+
   return result;
 }
 
@@ -846,7 +887,8 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
     competitor: 8,
     supplier: 9,
     inventory: 7,
-    risk: 5
+    coordinator: 5,
+    strategy: 6
   };
 
   if (await databaseReady()) {

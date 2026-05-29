@@ -122,7 +122,7 @@ export function MarketContextClient() {
       <PageHeader
         eyebrow={<Badge tone="teal">Briefing</Badge>}
         title="Define the decision AMI should analyze"
-        description="AMI coordinates five operational signals to evaluate market conditions and generate prioritized recommendations."
+        description="AMI coordinates market, supplier, inventory, synthesis, and strategy signals to generate prioritized recommendations."
       />
 
       <Surface className="mt-7">

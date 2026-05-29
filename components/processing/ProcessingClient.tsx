@@ -14,34 +14,46 @@ import {
   type SourceMode
 } from "@/lib/schemas/ami";
 
-type AssistantState = "pending" | "running" | "completed" | "warning" | "failed" | "skipped" | "limited";
+type AssistantState = "pending" | "running" | "completed" | "warning" | "failed" | "skipped" | "fallback" | "limited";
 
 const MIN_ORCHESTRATION_VISIBLE_MS = 3500;
 const PREPARING_REDIRECT_DELAY_MS = 650;
 
-const initialStates: Record<AssistantId, AssistantState> = {
-  trend: "pending",
-  competitor: "pending",
-  supplier: "pending",
-  inventory: "pending",
-  risk: "pending"
-};
+function assistantSeedActivity(id: AssistantId) {
+  const copy: Record<AssistantId, string> = {
+    trend: "Waiting to review demand and trend momentum.",
+    competitor: "Waiting to compare pricing, availability, and market pressure.",
+    supplier: "Waiting to compare supplier cost, delivery, and sourcing risk.",
+    inventory: "Waiting to evaluate stock posture and operational context.",
+    coordinator: "Waiting to compare agent agreements, conflicts, and confidence gaps.",
+    strategy: "Waiting to produce final AMI verdict and next action."
+  };
 
-const latestActivity: Record<AssistantId, string> = {
-  trend: "Waiting to review demand and social momentum signals.",
-  competitor: "Waiting to compare pricing, availability, and market pressure.",
-  supplier: "Waiting to compare supplier cost, delivery, and sourcing risk.",
-  inventory: "Waiting to evaluate stock posture and operational context.",
-  risk: "Waiting to review confidence, evidence gaps, and action readiness."
-};
+  return copy[id];
+}
 
-const sourceTypes: Record<AssistantId, string> = {
-  trend: "Public market and social signals",
-  competitor: "Marketplace comparison",
-  supplier: "Supplier catalog snapshot",
-  inventory: "Workspace inventory context",
-  risk: "Assistant evidence synthesis"
-};
+function assistantSourceType(id: AssistantId) {
+  const copy: Record<AssistantId, string> = {
+    trend: "Demand and trend KPIs",
+    competitor: "Marketplace comparison",
+    supplier: "Supplier evidence",
+    inventory: "Inventory context",
+    coordinator: "Cross-agent synthesis",
+    strategy: "Final verdict"
+  };
+
+  return copy[id];
+}
+
+const initialStates = VisibleAssistants.reduce(
+  (states, assistant) => ({ ...states, [assistant.id]: "pending" as AssistantState }),
+  {} as Record<AssistantId, AssistantState>
+);
+
+const latestActivity = VisibleAssistants.reduce(
+  (activity, assistant) => ({ ...activity, [assistant.id]: assistantSeedActivity(assistant.id) }),
+  {} as Record<AssistantId, string>
+);
 
 const processingMessages = [
   "Collecting marketplace and demand signals",
@@ -75,7 +87,7 @@ function dotTone(state: AssistantState): "teal" | "amber" | "red" | "green" | "s
     return "teal";
   }
 
-  if (state === "warning" || state === "limited") {
+  if (state === "warning" || state === "limited" || state === "fallback") {
     return "amber";
   }
 
@@ -89,13 +101,13 @@ function dotTone(state: AssistantState): "teal" | "amber" | "red" | "green" | "s
 function failedStartStates(message: string): Record<AssistantId, AssistantState> {
   const inventoryIssue = message.toLowerCase().includes("inventory");
 
-  return {
-    trend: inventoryIssue ? "skipped" : "failed",
-    competitor: inventoryIssue ? "skipped" : "failed",
-    supplier: inventoryIssue ? "skipped" : "failed",
-    inventory: inventoryIssue ? "warning" : "failed",
-    risk: inventoryIssue ? "skipped" : "failed"
-  };
+  return VisibleAssistants.reduce(
+    (states, assistant) => ({
+      ...states,
+      [assistant.id]: inventoryIssue ? (assistant.id === "inventory" ? "warning" : "skipped") : "failed"
+    }),
+    {} as Record<AssistantId, AssistantState>
+  );
 }
 
 function logProcessing(message: string, details?: Record<string, unknown>) {
@@ -114,6 +126,7 @@ export function ProcessingClient() {
   const [sourceMode, setSourceMode] = useState<SourceMode>("demo_snapshot");
   const [message, setMessage] = useState("");
   const [isPreparingStrategy, setIsPreparingStrategy] = useState(false);
+  const [latestResult, setLatestResult] = useState<AnalysisResult | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -165,66 +178,135 @@ export function ProcessingClient() {
     });
     const inventoryCanBeLimited = !context.useInventoryContext && context.businessGoal === "discover_new_products";
 
-    timers.push(
-      window.setTimeout(() => {
+    VisibleAssistants.forEach((assistant, index) => {
+      timers.push(
+        window.setTimeout(() => {
+          if (!isActive) {
+            return;
+          }
+
+          setProgress(Math.min(88, 20 + index * 11));
+          setAssistantStates((current) => ({
+            ...current,
+            [assistant.id]: assistant.id === "inventory" && inventoryCanBeLimited ? "limited" : "running"
+          }));
+          setActivity((current) => ({
+            ...current,
+            [assistant.id]:
+              assistant.id === "inventory" && inventoryCanBeLimited
+                ? "Inventory context is optional for this discovery briefing."
+                : assistantSeedActivity(assistant.id).replace("Waiting to", "Running")
+          }));
+          setSourceStatus(processingMessages[Math.min(index, processingMessages.length - 1)]);
+        }, 250 + index * 430)
+      );
+    });
+
+    function applyAnalysisState(result: AnalysisResult) {
+      const statusRows =
+        result.agentStatus?.length
+          ? result.agentStatus
+          : VisibleAssistants.map((assistant) => ({
+              agentType: assistant.id,
+              status: result.assistantStatus?.[assistant.id] ?? "pending",
+              latestActivity: assistantSeedActivity(assistant.id)
+            }));
+
+      setAssistantStates(
+        statusRows.reduce(
+          (states, row) => ({
+            ...states,
+            [row.agentType]:
+              row.agentType === "inventory" && inventoryCanBeLimited && row.status === "skipped"
+                ? "limited"
+                : assistantStateFromResult(row.status)
+          }),
+          {} as Record<AssistantId, AssistantState>
+        )
+      );
+      setActivity((current) => ({
+        ...current,
+        ...Object.fromEntries(statusRows.map((row) => [row.agentType, row.latestActivity ?? assistantSeedActivity(row.agentType)]))
+      }));
+      setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
+      setSourceStatus(result.sourceCollectionStatus?.label ?? "Source collection completed");
+      setLatestResult(result);
+
+      if (result.status === "metrics_ready") {
+        setProgress(62);
+      } else if (result.status === "agents_running" || result.status === "synthesizing" || result.status === "generating_verdict") {
+        setProgress(86);
+      } else {
+        setProgress(100);
+      }
+
+      if (result.warnings?.length) {
+        setMessage(result.warnings[0]);
+      }
+    }
+
+    function isTerminal(result: AnalysisResult) {
+      return result.status === "completed" || result.status === "completed_with_fallback" || result.status === "failed";
+    }
+
+    function redirectWhenReady(result: AnalysisResult) {
+      setIsPreparingStrategy(true);
+      window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
+      const visibleForMs = Date.now() - orchestrationStartedAt;
+      const redirectDelayMs =
+        visibleForMs >= MIN_ORCHESTRATION_VISIBLE_MS
+          ? PREPARING_REDIRECT_DELAY_MS
+          : MIN_ORCHESTRATION_VISIBLE_MS - visibleForMs;
+      timers.push(
+        window.setTimeout(() => {
+          if (isActive) {
+            router.push(`/recommendations?runId=${result.analysisRunId}`);
+          }
+        }, redirectDelayMs)
+      );
+    }
+
+    async function pollAnalysis(analysisRunId: string) {
+      const pollTimer = window.setTimeout(async () => {
         if (!isActive) {
           return;
         }
 
-        setProgress(24);
-        setAssistantStates((current) => ({ ...current, trend: "running" }));
-        setActivity((current) => ({ ...current, trend: "Reading demand direction, seasonality, and trend velocity." }));
-      }, 250),
-      window.setTimeout(() => {
-        if (!isActive) {
-          return;
-        }
+        try {
+          const response = await fetch(`/api/analysis/${analysisRunId}`, { signal: controller.signal });
 
-        setProgress(42);
-        setAssistantStates((current) => ({ ...current, trend: "completed", competitor: "running" }));
-        setActivity((current) => ({ ...current, competitor: "Comparing competitor prices, discounts, and availability." }));
-        setSourceStatus(processingMessages[1]);
-      }, 850),
-      window.setTimeout(() => {
-        if (!isActive) {
-          return;
-        }
+          if (!response.ok) {
+            throw new Error("AMI could not retrieve the latest analysis status.");
+          }
 
-        setProgress(61);
-        setAssistantStates((current) => ({ ...current, competitor: "completed", supplier: "running" }));
-        setActivity((current) => ({ ...current, supplier: "Estimating unit cost, delivery windows, and sourcing risk." }));
-        setSourceStatus(processingMessages[2]);
-      }, 1400),
-      window.setTimeout(() => {
-        if (!isActive) {
-          return;
-        }
+          const result = (await response.json()) as AnalysisResult;
 
-        setProgress(78);
-        setAssistantStates((current) => ({
-          ...current,
-          supplier: "completed",
-          inventory: inventoryCanBeLimited ? "limited" : "running",
-          risk: "running"
-        }));
-        setActivity((current) => ({
-          ...current,
-          inventory: inventoryCanBeLimited
-            ? "Using demo context because connected inventory is not required for this goal."
-            : "Checking stock posture, margin context, and operational risk.",
-          risk: "Reviewing confidence level, risk exposure, and evidence completeness."
-        }));
-        setSourceStatus(processingMessages[3]);
-      }, 1950),
-      window.setTimeout(() => {
-        if (!isActive) {
-          return;
-        }
+          if (!isActive) {
+            return;
+          }
 
-        setProgress(90);
-        setSourceStatus(processingMessages[4]);
-      }, 2400)
-    );
+          applyAnalysisState(result);
+          window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
+
+          if (isTerminal(result)) {
+            redirectWhenReady(result);
+            return;
+          }
+
+          pollAnalysis(analysisRunId);
+        } catch (error) {
+          if (!isActive) {
+            return;
+          }
+
+          const errorMessage = error instanceof Error ? error.message : "AMI polling failed.";
+          setMessage(errorMessage);
+          logProcessing("analysis polling failed", { reason: errorMessage });
+        }
+      }, 1200);
+
+      timers.push(pollTimer);
+    }
 
     async function startAnalysis() {
       try {
@@ -272,46 +354,17 @@ export function ProcessingClient() {
           return;
         }
 
-        const inventoryState = assistantStateFromResult(result.assistantStatus?.inventory);
         timers.forEach((timer) => window.clearTimeout(timer));
         timers.length = 0;
-        setAssistantStates({
-          trend: assistantStateFromResult(result.assistantStatus?.trend),
-          competitor: assistantStateFromResult(result.assistantStatus?.competitor),
-          supplier: assistantStateFromResult(result.assistantStatus?.supplier),
-          inventory: inventoryCanBeLimited && inventoryState === "skipped" ? "limited" : inventoryState,
-          risk: assistantStateFromResult(result.assistantStatus?.risk)
-        });
-        setActivity((current) => ({
-          ...current,
-          inventory:
-            inventoryState === "warning"
-              ? "Inventory context was requested but unavailable, so AMI continued without it."
-              : inventoryState === "skipped"
-                ? "Inventory Assistant was skipped for this optional inventory run."
-                : "Inventory context resolved for this recommendation.",
-          risk: "Risk and confidence review completed for the recommendation."
-        }));
-        setProgress(100);
-        setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
-        setSourceStatus(result.sourceCollectionStatus?.label ?? "Source collection completed");
-        setIsPreparingStrategy(true);
-        if (result.warnings?.length) {
-          setMessage(result.warnings[0]);
-        }
+        applyAnalysisState(result);
         window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
-        const visibleForMs = Date.now() - orchestrationStartedAt;
-        const redirectDelayMs =
-          visibleForMs >= MIN_ORCHESTRATION_VISIBLE_MS
-            ? PREPARING_REDIRECT_DELAY_MS
-            : MIN_ORCHESTRATION_VISIBLE_MS - visibleForMs;
-        timers.push(
-          window.setTimeout(() => {
-            if (isActive) {
-              router.push(`/recommendations?runId=${result.analysisRunId}`);
-            }
-          }, redirectDelayMs)
-        );
+
+        if (isTerminal(result)) {
+          redirectWhenReady(result);
+          return;
+        }
+
+        pollAnalysis(result.analysisRunId);
       } catch (error) {
         const isAbortError = error instanceof DOMException && error.name === "AbortError";
 
@@ -396,6 +449,28 @@ export function ProcessingClient() {
           </div>
         </div>
 
+        {latestResult?.preliminaryMetrics && (
+          <div className="mt-5 rounded-lg border border-slate-200 bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-950">Preliminary metrics ready</p>
+                <p className="mt-1 text-sm text-slate-600">Graph data is available while AMI finishes synthesis.</p>
+              </div>
+              {latestResult.sourceCollectionStatus.usedFallback && (
+                <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                  Fallback data
+                </span>
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricPreview label="Opportunity" value={`${latestResult.preliminaryMetrics.opportunityScoreBase}/100`} />
+              <MetricPreview label="Margin" value={`${latestResult.preliminaryMetrics.estimatedMargin.toFixed(1)}%`} />
+              <MetricPreview label="Demand" value={`${latestResult.preliminaryMetrics.demandSignal}/100`} />
+              <MetricPreview label="Products" value={String(latestResult.preliminaryMetrics.productCount)} />
+            </div>
+          </div>
+        )}
+
         <div className="mt-5 flex flex-col gap-3">
           {VisibleAssistants.map((assistant) => {
             const state = assistantStates[assistant.id];
@@ -423,7 +498,7 @@ export function ProcessingClient() {
                     <StatusDot tone={dotTone(state)} />
                     {state}
                   </span>
-                  <span className="text-xs font-semibold uppercase text-slate-500">{sourceTypes[assistant.id]}</span>
+                  <span className="text-xs font-semibold uppercase text-slate-500">{assistantSourceType(assistant.id)}</span>
                 </div>
               </div>
             );
@@ -440,5 +515,14 @@ export function ProcessingClient() {
         {message && <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
       </section>
     </main>
+  );
+}
+
+function MetricPreview({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-slate-950">{value}</p>
+    </div>
   );
 }

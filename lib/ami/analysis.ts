@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { scrapeProductPage, searchSERP } from "@/lib/brightdata/client";
+import type { AgentOutput, RiskLevel, VerdictAgentOutput } from "@/lib/schemas/agents";
 import type {
   AnalysisResult,
   AssistantContribution,
   AssistantFinding,
   EvidencePackage,
   MarketContextPayload,
+  NormalizedProduct,
   Recommendation,
   SourceMode,
   SupplierOption
@@ -13,284 +14,364 @@ import type {
 import {
   AnalysisResultSchema,
   AssistantFindingSchema,
-  EvidencePackageSchema,
   RecommendationSchema
 } from "@/lib/schemas/ami";
+import { buildGraphData } from "@/lib/analysis/graph-data";
+import { extractPreliminaryMetrics } from "@/lib/analysis/kpi-extraction";
+import { buildEvidencePackages } from "@/lib/analysis/evidence";
+import { collectBrightDataEvidence } from "@/lib/data-providers/brightdata/client";
+import { buildAgentStatus, buildPendingAgentStatus, runAmiAgents } from "@/lib/agents/orchestrator";
+import type { AgentContext } from "@/lib/agents/types";
 
 export const INVENTORY_CONTEXT_UNAVAILABLE_WARNING =
   "Inventory context was requested, but no usable inventory source is connected. AMI continued using trend, competitor, and supplier signals.";
 
-type InventoryRunContext = {
+export type InventoryRunContext = {
   requested: boolean;
   available: boolean;
   warningMessage?: string;
   sourceLabel?: string;
 };
 
-function riskFromGoal(goal: MarketContextPayload["businessGoal"]) {
-  if (goal === "stock_optimization") {
-    return "medium" as const;
+function signalLevel(value: number): "weak" | "moderate" | "strong" {
+  if (value >= 70) {
+    return "strong";
   }
 
-  if (goal === "discover_new_products") {
-    return "low" as const;
+  if (value >= 45) {
+    return "moderate";
   }
 
-  return "medium" as const;
+  return "weak";
 }
 
-function actionFromGoal(context: MarketContextPayload) {
-  const actions: Record<MarketContextPayload["businessGoal"], string> = {
-    discover_new_products: `Prioritize sourcing review for ${context.productName}`,
-    stock_optimization: `Optimize stock movement for ${context.productName}`,
-    revenue_stock_opportunities: `Position ${context.productName} for revenue lift`
+function confidenceLevel(value: number): "low" | "medium" | "high" {
+  if (value >= 0.78) {
+    return "high";
+  }
+
+  if (value >= 0.55) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function riskForLegacy(risk: RiskLevel): "low" | "medium" | "high" {
+  if (risk === "critical") {
+    return "high";
+  }
+
+  if (risk === "unknown") {
+    return "medium";
+  }
+
+  return risk;
+}
+
+function modeFromCollection(status: string, usedFallback: boolean): SourceMode {
+  if (usedFallback) {
+    return "demo_fallback";
+  }
+
+  if (status === "live") {
+    return "live";
+  }
+
+  if (status === "not_configured") {
+    return "not_configured";
+  }
+
+  if (status === "error") {
+    return "error";
+  }
+
+  return "demo_fallback";
+}
+
+function fallbackVerdict(analysisRunId: string, context: MarketContextPayload, products: NormalizedProduct[]): VerdictAgentOutput {
+  return {
+    agentType: "strategy",
+    status: "fallback",
+    finalVerdict: "AMI preliminary metrics are ready; final AI verdict is still pending.",
+    recommendedAction: `Continue monitoring ${context.productName} until the strategy agent completes.`,
+    reasoning: "The API has completed Bright Data collection, normalization, KPI extraction, and graph preparation.",
+    confidence: 0.55,
+    riskLevel: "medium",
+    nextStep: "Poll this analysis run for the final AMI verdict.",
+    agentAgreement: [],
+    agentConflicts: [],
+    evidenceSummary: [],
+    externalActionPayload: {
+      actionType: "analysis_pending",
+      priority: "medium",
+      requiresHumanApproval: true,
+      targetProducts: products.slice(0, 5).map((product) => product.externalId ?? product.title),
+      sourceAnalysisRunId: analysisRunId
+    }
   };
-
-  return actions[context.businessGoal];
 }
 
-function assistantContributions(mode: SourceMode, product: string, inventoryContext: InventoryRunContext): AssistantContribution[] {
-  const sourceLabel =
-    mode === "live"
-      ? "Bright Data live web intelligence"
-      : "Bright Data-shaped demo fallback source snapshots";
-  const usesInventory = inventoryContext.requested && inventoryContext.available;
-  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
+function buildSupplierOptions(context: MarketContextPayload, products: NormalizedProduct[]): SupplierOption[] {
+  const seen = new Set<string>();
 
-  return [
-    {
-      assistantId: "trend",
-      summary: `Validated demand momentum for ${product} with seasonal and social signal context.`,
-      latestContribution: "Detected rising search and social momentum, with seasonality supporting near-term demand.",
-      signalStrength: "strong",
-      confidence: "high",
-      risk: "low",
-      dataSourcesUsed: [sourceLabel, "Demand momentum snapshot"],
-      usageCost: 0.6
-    },
-    {
-      assistantId: "competitor",
-      summary: "Detected moderate price pressure with room to protect margin.",
-      latestContribution: "Compared competitor price, promotion pressure, availability, and market pressure.",
-      signalStrength: "moderate",
-      confidence: "high",
-      risk: "medium",
-      dataSourcesUsed: [sourceLabel, "Marketplace comparison snapshot"],
-      usageCost: 0.8
-    },
-    {
-      assistantId: "supplier",
-      summary: "Found viable supplier options with estimated costs, delivery windows, and manageable sourcing risk.",
-      latestContribution: "Compared supplier cost, availability, match confidence, and estimated delivery time.",
-      signalStrength: "strong",
-      confidence: "medium",
-      risk: "medium",
-      dataSourcesUsed: ["Verified supplier catalog", "Supplier pricing snapshot"],
-      usageCost: 0.9
-    },
-    {
-      assistantId: "inventory",
-      summary: inventoryUnavailable
-        ? "Inventory context was requested, but no usable source is connected."
-        : usesInventory
-          ? "Reviewed stock posture and supplier margin context without exposing raw inventory records."
-          : "Inventory Assistant was skipped because this goal can run without inventory context.",
-      latestContribution: inventoryUnavailable
-        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
-        : usesInventory
-          ? "Flagged enough margin headroom to justify a controlled sourcing review."
-          : "AMI used trend, competitor, and supplier signals without inventory context.",
-      signalStrength: usesInventory ? "strong" : "moderate",
-      confidence: "medium",
-      risk: "medium",
-      dataSourcesUsed: usesInventory
-        ? [inventoryContext.sourceLabel ?? "Workspace inventory context", "Supplier margin snapshot"]
-        : ["Inventory Assistant skipped", "Trend, competitor, and supplier signals"],
-      usageCost: usesInventory ? 0.7 : 0
-    },
-    {
-      assistantId: "risk",
-      summary: "Reviewed confidence, risk exposure, evidence gaps, and validation readiness.",
-      latestContribution: "Confirmed the recommendation should remain a controlled validation step before scaling.",
-      signalStrength: "moderate",
-      confidence: "high",
-      risk: "medium",
-      dataSourcesUsed: ["Assistant evidence summary", "Risk and confidence rubric"],
-      usageCost: 0.5
-    }
-  ];
+  return products
+    .filter((product) => product.supplierName || product.supplierPrice)
+    .map((product, index) => ({
+      supplierName: product.supplierName ?? `${context.supplierSource} option ${index + 1}`,
+      source: product.source,
+      estimatedUnitCost: product.supplierPrice ?? 0,
+      estimatedDeliveryTime: product.estimatedDeliveryTime ?? "Validation required",
+      availability: product.availability ?? "Unknown",
+      ratingQualityProxy: product.rating ? `${product.rating.toFixed(1)} / 5 rating proxy` : "Quality proxy pending",
+      matchConfidence: confidenceLevel(product.matchConfidence ?? 0.6),
+      risk: riskForLegacy((product.riskScore ?? 50) >= 75 ? "high" : (product.riskScore ?? 50) >= 45 ? "medium" : "low")
+    }))
+    .filter((supplier) => {
+      const key = `${supplier.supplierName}-${supplier.estimatedUnitCost}`;
+
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
 }
 
-function assistantFindings(
-  context: MarketContextPayload,
-  mode: SourceMode,
-  sourceLabel: string,
-  inventoryContext: InventoryRunContext
-): AssistantFinding[] {
-  const dataFreshness =
-    mode === "live" ? "Collected during this analysis run" : "Seeded demo snapshot refreshed for the MVP walkthrough";
-  const usesInventory = inventoryContext.requested && inventoryContext.available;
-  const inventoryUnavailable = inventoryContext.requested && !inventoryContext.available;
+function contributionFromOutput(output: AgentOutput, sourceMode: SourceMode): AssistantContribution {
+  const usageCost: Record<string, number> = {
+    trend: 0.4,
+    competitor: 0.5,
+    supplier: 0.5,
+    inventory: 0.3,
+    coordinator: 0.9,
+    strategy: 1
+  };
+  const finding = "finding" in output ? output.finding : "summary" in output ? output.summary : output.finalVerdict;
+  const reason = "summary" in output ? output.summary : output.reasoning;
 
-  return [
-    {
-      assistantId: "trend",
-      finding: "Demand momentum is strong enough to justify near-term validation.",
-      reason: "Search interest and social momentum support a short-cycle market test.",
-      signal: "strong",
-      confidence: "high",
-      risk: "low",
-      sourceType: sourceLabel,
-      sourceLabel: "Demand and social momentum snapshot",
-      dataFreshness
-    },
-    {
-      assistantId: "competitor",
-      finding: "Competitor pressure is present but not blocking.",
-      reason: `${context.targetMarketplace} comparison shows price room if supplier terms hold.`,
-      signal: "moderate",
-      confidence: "high",
-      risk: "medium",
-      sourceType: sourceLabel,
-      sourceLabel: "Competitor marketplace snapshot",
-      dataFreshness
-    },
-    {
-      assistantId: "supplier",
-      finding: "Supplier options are available for a controlled sourcing review.",
-      reason: "Supplier cost, delivery estimates, and match confidence support a scoped validation step before scaling.",
-      signal: "strong",
-      confidence: "medium",
-      risk: "medium",
-      sourceType: "Supplier sourcing snapshot",
-      sourceLabel: "Verified supplier catalog",
-      dataFreshness: "Demo supplier snapshot prepared for this MVP"
-    },
-    {
-      assistantId: "inventory",
-      finding: inventoryUnavailable
-        ? "Inventory Assistant continued as a warning state."
-        : usesInventory
-          ? "Inventory context supports a controlled action, not a broad purchasing move."
-          : "Inventory Assistant was skipped for this optional inventory goal.",
-      reason: inventoryUnavailable
-        ? (inventoryContext.warningMessage ?? INVENTORY_CONTEXT_UNAVAILABLE_WARNING)
-        : usesInventory
-          ? "AMI used connected inventory context to keep the recommendation scoped to current operating posture."
-          : "AMI used supplier and margin context because no connected inventory source was selected.",
-      signal: usesInventory ? "strong" : "moderate",
-      confidence: "medium",
-      risk: "medium",
-      sourceType: "Workspace inventory context",
-      sourceLabel: usesInventory ? inventoryContext.sourceLabel ?? "Connected inventory context" : "No inventory context selected",
-      dataFreshness: usesInventory
-        ? "Last inventory analysis timestamp is available in Account / Workspace"
-        : "No inventory sync was used for this run"
-    },
-    {
-      assistantId: "risk",
-      finding: "Risk is manageable if the action remains scoped to validation.",
-      reason: "The available evidence supports a decision, but supplier delivery terms and market response should be confirmed before scaling.",
-      signal: "moderate",
-      confidence: "high",
-      risk: "medium",
-      sourceType: "AMI evidence synthesis",
-      sourceLabel: "Risk and confidence rubric",
-      dataFreshness
-    }
-  ].map((finding) => AssistantFindingSchema.parse(finding));
+  return {
+    assistantId: output.agentType,
+    summary: reason,
+    latestContribution: finding,
+    signalStrength: output.confidence >= 0.75 ? "strong" : output.confidence >= 0.55 ? "moderate" : "weak",
+    confidence: confidenceLevel(output.confidence),
+    risk: riskForLegacy(output.riskLevel),
+    dataSourcesUsed: [
+      sourceMode === "live" ? "Bright Data live normalized evidence" : "Bright Data-shaped fallback evidence",
+      output.status === "fallback" ? "Deterministic agent fallback" : "Compact KPI evidence"
+    ],
+    usageCost: usageCost[output.agentType] ?? 0.2
+  };
 }
 
-function buildEvidencePackage(
-  context: MarketContextPayload,
-  mode: "live" | "demo_fallback",
-  brightDataProduct: "MCP Server" | "Web Scraper API" | "SERP API" | "Web Unlocker" | "Scraping Browser" | "Scraper Studio",
-  scrapedAt: string
-): EvidencePackage {
-  return EvidencePackageSchema.parse({
-    evidencePackageId: randomUUID(),
-    sourceMarketplace: context.targetMarketplace,
-    sourceType: mode === "live" ? "bright_data_live_web_data" : "bright_data_demo_fallback_snapshot",
-    sourceUrl: "https://www.amazon.com/s?k=insulated+tumbler",
-    brightDataProduct,
-    brightDataMode: mode,
-    scrapedAt,
-    productIdentity: context.productName,
-    currentPrice: 29.99,
-    supplierPrice: 18.4,
-    estimatedMargin: 38.6,
-    demandIndicators: ["Rising search interest", "Positive review velocity", "Seasonal buying window"],
-    socialMomentum: "strong",
-    competitionLevel: "moderate",
-    matchQuality: "high",
-    matchScore: 86,
-    matchedAttributes: ["Product name", "Category", "Capacity", "Material", "Marketplace query intent"],
-    riskInputs: ["Moderate promotion pressure", "Supplier delivery time should be validated"],
-    assistantUsed: "competitor"
+function findingFromOutput(output: AgentOutput, sourceMode: SourceMode): AssistantFinding {
+  const finding = "finding" in output ? output.finding : "summary" in output ? output.summary : output.finalVerdict;
+  const reason = "summary" in output ? output.summary : output.reasoning;
+
+  return AssistantFindingSchema.parse({
+    assistantId: output.agentType,
+    finding,
+    reason,
+    signal: output.confidence >= 0.75 ? "strong" : output.confidence >= 0.55 ? "moderate" : "weak",
+    confidence: confidenceLevel(output.confidence),
+    risk: riskForLegacy(output.riskLevel),
+    sourceType: sourceMode === "live" ? "Bright Data live data" : "Bright Data fallback data",
+    sourceLabel: output.status === "fallback" ? "Fallback agent output" : "Normalized KPI evidence",
+    dataFreshness: sourceMode === "live" ? "Collected during this analysis run" : "Deterministic fallback generated during this run"
   });
-}
-
-function buildSupplierOptions(): SupplierOption[] {
-  return [
-    {
-      supplierName: "Northstar Supply Co.",
-      source: "Verified supplier catalog",
-      estimatedUnitCost: 18.4,
-      estimatedDeliveryTime: "8-12 days",
-      availability: "In stock",
-      ratingQualityProxy: "4.7 / 5 quality proxy",
-      matchConfidence: "high",
-      risk: "low"
-    },
-    {
-      supplierName: "Pacific Drinkware Direct",
-      source: "Supplier marketplace snapshot",
-      estimatedUnitCost: 16.9,
-      estimatedDeliveryTime: "14-21 days",
-      availability: "Limited batch",
-      ratingQualityProxy: "4.3 / 5 quality proxy",
-      matchConfidence: "medium",
-      risk: "medium"
-    }
-  ];
 }
 
 function buildRecommendation(
   workspaceId: string,
   analysisRunId: string,
   context: MarketContextPayload,
+  verdict: VerdictAgentOutput,
+  products: NormalizedProduct[],
   evidencePackage: EvidencePackage,
-  mode: SourceMode,
-  inventoryContext: InventoryRunContext
+  sourceMode: SourceMode,
+  outputs: AgentOutput[]
 ): Recommendation {
-  const riskLevel = riskFromGoal(context.businessGoal);
-  const contributions = assistantContributions(mode, context.productName, inventoryContext);
-  const opportunityScore = inventoryContext.requested && inventoryContext.available ? 84 : 78;
+  const primary = products[0];
 
   return RecommendationSchema.parse({
     recommendationId: randomUUID(),
     analysisRunId,
     workspaceId,
-    recommendedAction: actionFromGoal(context),
-    opportunityScore,
-    estimatedMargin: evidencePackage.estimatedMargin,
-    demandSignal: "strong",
-    riskLevel,
-    confidenceLevel: "high",
-    signalStrength: "strong",
+    recommendedAction: verdict.recommendedAction,
+    opportunityScore: Math.round(Math.min(100, Math.max(0, (primary?.demandSignal ?? 60) * 0.35 + (primary?.estimatedMargin ?? 35) * 0.9))),
+    estimatedMargin: primary?.estimatedMargin ?? evidencePackage.estimatedMargin,
+    demandSignal: signalLevel(primary?.demandSignal ?? 55),
+    riskLevel: riskForLegacy(verdict.riskLevel),
+    confidenceLevel: confidenceLevel(verdict.confidence),
+    signalStrength: signalLevel(primary?.trendMomentum ?? 55),
     dataFreshness:
-      mode === "live"
+      sourceMode === "live"
         ? "Live Bright Data collection completed during this run"
-        : "Demo fallback uses seeded Bright Data-shaped source snapshots",
-    matchQuality: evidencePackage.matchQuality,
-    primaryReason:
-      "AMI detected a margin-backed opportunity with rising demand, viable supplier options, and manageable competitor pressure.",
-    suggestedNextStep:
-      "Run a controlled sourcing validation and confirm supplier delivery terms before scaling the action.",
-    assistantContributions: contributions,
+        : "Fallback uses deterministic Bright Data-shaped source snapshots",
+    matchQuality: confidenceLevel(primary?.matchConfidence ?? 0.6),
+    primaryReason: verdict.reasoning,
+    suggestedNextStep: verdict.nextStep,
+    assistantContributions: outputs.map((output) => contributionFromOutput(output, sourceMode)),
     evidencePackageId: evidencePackage.evidencePackageId,
     status: "new",
     createdAt: new Date().toISOString()
+  });
+}
+
+function secondaryRecommendation(primary: Recommendation, context: MarketContextPayload): Recommendation {
+  return RecommendationSchema.parse({
+    ...primary,
+    recommendationId: randomUUID(),
+    recommendedAction: `Monitor ${context.productName} competitor movement before broad rollout`,
+    opportunityScore: Math.max(0, primary.opportunityScore - 8),
+    confidenceLevel: "medium",
+    primaryReason: "A monitor-and-adjust path remains useful if competitor pressure or trend momentum changes after the first action.",
+    suggestedNextStep: "Review graph metrics and supplier terms after the first validation window."
+  });
+}
+
+function assistantStatusRecord(agentStatus: AnalysisResult["agentStatus"]): AnalysisResult["assistantStatus"] {
+  return Object.fromEntries(agentStatus.map((entry) => [entry.agentType, entry.status])) as AnalysisResult["assistantStatus"];
+}
+
+export async function createAnalysisRunToMetrics(
+  workspaceId: string,
+  context: MarketContextPayload,
+  inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext }
+): Promise<AnalysisResult> {
+  const analysisRunId = randomUUID();
+  const startedAt = new Date().toISOString();
+  const collection = await collectBrightDataEvidence(context);
+  const sourceMode = modeFromCollection(collection.status, collection.usedFallback);
+  const metrics = extractPreliminaryMetrics(collection.products, collection.evidenceRefs.length);
+  const graphData = buildGraphData(collection.products, metrics);
+  const evidencePackages = buildEvidencePackages(
+    context,
+    collection.products,
+    collection.evidenceRefs,
+    sourceMode,
+    collection.brightDataProduct,
+    collection.collectedAt
+  );
+  const pendingVerdict = fallbackVerdict(analysisRunId, context, collection.products);
+  const pendingOutputs: AgentOutput[] = [pendingVerdict];
+  const executiveRecommendation = buildRecommendation(
+    workspaceId,
+    analysisRunId,
+    context,
+    pendingVerdict,
+    collection.products,
+    evidencePackages[0],
+    sourceMode,
+    pendingOutputs
+  );
+  const agentStatus = buildPendingAgentStatus();
+  const warnings = [
+    ...collection.warnings,
+    inventoryContext.warningMessage
+  ].filter((warning): warning is string => Boolean(warning));
+
+  return AnalysisResultSchema.parse({
+    analysisRunId,
+    workspaceId,
+    marketContext: context,
+    status: collection.status === "error" && !collection.usedFallback ? "failed" : "metrics_ready",
+    startedAt,
+    assistantStatus: assistantStatusRecord(agentStatus),
+    sourceCollectionStatus: {
+      brightDataProduct: collection.brightDataProduct,
+      mode: sourceMode,
+      label: collection.label,
+      collectedAt: collection.collectedAt,
+      providerStatus: collection.status,
+      usedFallback: collection.usedFallback,
+      fallbackReason: collection.fallbackReason,
+      maxResults: collection.maxResults
+    },
+    normalizedProducts: collection.products,
+    evidenceRefs: collection.evidenceRefs,
+    preliminaryMetrics: metrics,
+    graphData,
+    agentStatus,
+    agentRuns: [],
+    synthesis: undefined,
+    finalVerdict: undefined,
+    externalActionPayload: pendingVerdict.externalActionPayload,
+    usedFallback: collection.usedFallback,
+    fallbackReason: collection.fallbackReason,
+    executiveRecommendation,
+    opportunities: [executiveRecommendation, secondaryRecommendation(executiveRecommendation, context)],
+    assistantFindings: [],
+    evidencePackages,
+    supplierOptions: buildSupplierOptions(context, collection.products),
+    warnings,
+    demoMode: collection.usedFallback
+  });
+}
+
+export async function completeAnalysisRun(metricsRun: AnalysisResult): Promise<AnalysisResult> {
+  if (metricsRun.status === "failed") {
+    return metricsRun;
+  }
+
+  const metrics = metricsRun.preliminaryMetrics;
+
+  if (!metrics) {
+    throw new Error("Analysis run cannot continue without preliminary metrics.");
+  }
+
+  const agentContext: AgentContext = {
+    analysisRunId: metricsRun.analysisRunId,
+    briefing: metricsRun.marketContext,
+    products: metricsRun.normalizedProducts.slice(0, 5),
+    metrics,
+    evidenceRefs: metricsRun.evidenceRefs.slice(0, 10),
+    inventoryContext: {
+      requested: metricsRun.marketContext.useInventoryContext,
+      available: !metricsRun.warnings.includes(INVENTORY_CONTEXT_UNAVAILABLE_WARNING),
+      warningMessage: metricsRun.warnings.find((warning) => warning === INVENTORY_CONTEXT_UNAVAILABLE_WARNING),
+      sourceLabel: undefined
+    }
+  };
+  const agentResult = await runAmiAgents(agentContext);
+  const sourceMode = metricsRun.sourceCollectionStatus.mode;
+  const outputs = agentResult.outputs;
+  const finalVerdict = agentResult.finalVerdict;
+  const primaryEvidence = metricsRun.evidencePackages[0];
+  const executiveRecommendation = buildRecommendation(
+    metricsRun.workspaceId,
+    metricsRun.analysisRunId,
+    metricsRun.marketContext,
+    finalVerdict,
+    metricsRun.normalizedProducts,
+    primaryEvidence,
+    sourceMode,
+    outputs
+  );
+  const agentStatus = buildAgentStatus(outputs);
+  const usedFallback = metricsRun.usedFallback || agentResult.usedFallback;
+  const warnings = [...metricsRun.warnings, ...agentResult.warnings].filter(Boolean);
+
+  return AnalysisResultSchema.parse({
+    ...metricsRun,
+    status: usedFallback ? "completed_with_fallback" : "completed",
+    completedAt: new Date().toISOString(),
+    assistantStatus: assistantStatusRecord(agentStatus),
+    agentStatus,
+    agentRuns: outputs,
+    synthesis: agentResult.synthesis,
+    finalVerdict,
+    externalActionPayload: finalVerdict.externalActionPayload,
+    executiveRecommendation,
+    opportunities: [executiveRecommendation, secondaryRecommendation(executiveRecommendation, metricsRun.marketContext)],
+    assistantFindings: outputs.map((output) => findingFromOutput(output, sourceMode)),
+    warnings,
+    usedFallback,
+    fallbackReason: usedFallback ? warnings[0] ?? metricsRun.fallbackReason : undefined,
+    demoMode: usedFallback
   });
 }
 
@@ -299,65 +380,6 @@ export async function runAmiAnalysis(
   context: MarketContextPayload,
   inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext }
 ): Promise<AnalysisResult> {
-  const analysisRunId = randomUUID();
-  const startedAt = new Date().toISOString();
-  const [serpResult, scrapeResult] = await Promise.all([
-    searchSERP(`${context.productName} ${context.targetMarketplace} ${context.region}`),
-    scrapeProductPage("https://www.amazon.com/s?k=insulated+tumbler")
-  ]);
-  const mode = scrapeResult.mode === "live" || serpResult.mode === "live" ? "live" : "demo_fallback";
-  const completedAt = new Date().toISOString();
-  const evidencePackage = buildEvidencePackage(context, mode, scrapeResult.product, completedAt);
-  const supplierOptions = buildSupplierOptions();
-  const executiveRecommendation = buildRecommendation(workspaceId, analysisRunId, context, evidencePackage, mode, inventoryContext);
-  const findings = assistantFindings(context, mode, scrapeResult.message, inventoryContext);
-  const secondaryOpportunity = RecommendationSchema.parse({
-    ...executiveRecommendation,
-    recommendationId: randomUUID(),
-    recommendedAction: `Monitor ${context.productName} competitor promotions before broad rollout`,
-    opportunityScore: Math.max(0, executiveRecommendation.opportunityScore - 9),
-    riskLevel: "medium",
-    confidenceLevel: "medium",
-    primaryReason:
-      "A watch-and-adjust path remains useful if competitor promotion pressure increases during the validation window.",
-    suggestedNextStep: "Save this as a monitoring follow-up after the primary sourcing review."
-  });
-  const result = AnalysisResultSchema.parse({
-    analysisRunId,
-    workspaceId,
-    marketContext: context,
-    status: "completed",
-    startedAt,
-    completedAt,
-    assistantStatus: {
-      trend: "completed",
-      competitor: "completed",
-      supplier: "completed",
-      inventory:
-        inventoryContext.requested && inventoryContext.available
-          ? "completed"
-          : inventoryContext.warningMessage
-            ? "warning"
-            : "skipped",
-      risk: "completed"
-    },
-    sourceCollectionStatus: {
-      brightDataProduct: mode === "live" ? scrapeResult.product : "Web Scraper API / SERP API",
-      mode,
-      label:
-        mode === "live"
-          ? "Bright Data live web collection completed"
-          : "Bright Data demo fallback source snapshots used",
-      collectedAt: completedAt
-    },
-    executiveRecommendation,
-    opportunities: [executiveRecommendation, secondaryOpportunity],
-    assistantFindings: findings,
-    evidencePackages: [evidencePackage],
-    supplierOptions,
-    warnings: inventoryContext.warningMessage ? [inventoryContext.warningMessage] : [],
-    demoMode: mode === "demo_fallback"
-  });
-
-  return result;
+  const metricsRun = await createAnalysisRunToMetrics(workspaceId, context, inventoryContext);
+  return completeAnalysisRun(metricsRun);
 }
