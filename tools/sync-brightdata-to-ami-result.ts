@@ -75,16 +75,27 @@ function toRisk(score: number): "low" | "medium" | "high" {
 }
 
 function cleanText(value: unknown, fallback: string, maxLength = 240): string {
-  const text = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  const raw = typeof value === "string" && value.trim() ? value.trim() : fallback;
+  const text = raw
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/^(var|function)\s/i.test(text) || text.includes("document.") || text.includes("window.")) {
+    return fallback;
+  }
+
   return text.slice(0, maxLength);
 }
 
 function isValidUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value.trim()) return false;
+  if (!/^https?:\/\//i.test(value.trim())) return false;
 
   try {
-    new URL(value);
-    return true;
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
   } catch {
     return false;
   }
@@ -133,14 +144,24 @@ function buildAssistantContributions() {
       usageCost: 7
     },
     {
-      assistantId: "risk" as const,
-      summary: "Risk and confidence were reviewed against the imported marketplace evidence.",
-      latestContribution: "Flagged supplier validation and margin confirmation as the main readiness checks.",
+      assistantId: "coordinator" as const,
+      summary: "Specialist signals were synthesized against the imported Bright Data marketplace evidence.",
+      latestContribution: "Resolved demand, competitor, supplier, and inventory readiness into a single review path.",
       signalStrength: "moderate" as const,
       confidence: "high" as const,
       risk: "medium" as const,
-      dataSourcesUsed: ["Bright Data opportunity scores", "AMI risk rubric"],
+      dataSourcesUsed: ["Specialist assistant outputs", "Bright Data opportunity scores"],
       usageCost: 5
+    },
+    {
+      assistantId: "strategy" as const,
+      summary: "The imported opportunity was converted into AMI's final business recommendation and next step.",
+      latestContribution: "Produced the final recommended action, risk posture, and validation step.",
+      signalStrength: "moderate" as const,
+      confidence: "high" as const,
+      risk: "medium" as const,
+      dataSourcesUsed: ["Coordinator synthesis", "Final strategy payload"],
+      usageCost: 6
     }
   ];
 }
@@ -223,7 +244,9 @@ async function main() {
       sourceType: "marketplace_search_result",
       ...(isValidUrl(sourceUrl) ? { sourceUrl } : {}),
       brightDataProduct: "Web Scraper API" as const,
-      brightDataMode: "demo_fallback" as const,
+      brightDataMode: "live" as const,
+      sourceMode: "live" as const,
+      isFallback: false,
       scrapedAt: now,
       productIdentity: cleanText(opportunity.title, "Amazon product", 180),
       currentPrice: price,
@@ -286,6 +309,8 @@ async function main() {
       ),
       assistantContributions,
       evidencePackageId,
+      sourceMode: "live" as const,
+      fallbackUsed: false,
       status: "new" as const,
       createdAt: now
     };
@@ -337,7 +362,7 @@ async function main() {
       dataFreshness: "Demo context"
     },
     {
-      assistantId: "risk" as const,
+      assistantId: "coordinator" as const,
       finding: "Imported opportunities are ready for review but not automatic execution.",
       reason: "Bright Data evidence supports ranking, while supplier and margin validation remain required before action.",
       signal: "moderate" as const,
@@ -359,6 +384,19 @@ async function main() {
     currency: topOpportunity.evidence?.currency || "USD",
     useInventoryContext: false
   };
+  const sourceProof = rawOpportunities.slice(0, 3).map((opportunity) => ({
+    title: cleanText(opportunity.title, "Amazon product", 180),
+    sourceType: "brightdata" as const,
+    sourceMode: "live" as const,
+    sourceUrl: isValidUrl(opportunity.evidence?.sourceUrl) ? opportunity.evidence.sourceUrl : null,
+    collectedAt: now,
+    snippet: cleanText(
+      `Amazon demand proxy: ${opportunity.evidence?.reviewsCount || 0} reviews, ${opportunity.evidence?.boughtPastMonth || 0} bought past month.`,
+      "Amazon demand proxy imported from Bright Data.",
+      220
+    ),
+    isFallback: false
+  }));
 
   const result = {
     analysisRunId,
@@ -374,14 +412,26 @@ async function main() {
       competitor: "completed" as const,
       supplier: "completed" as const,
       inventory: "completed" as const,
-      risk: "completed" as const
+      coordinator: "completed" as const,
+      strategy: "completed" as const
     },
     sourceCollectionStatus: {
       brightDataProduct: "Web Scraper API",
-      mode: "demo_fallback" as const,
+      mode: "live" as const,
       label: "Bright Data Amazon Search raw import",
-      collectedAt: now
+      collectedAt: now,
+      providerStatus: "live_success" as const,
+      usedFallback: false,
+      fallbackUsed: false,
+      demoSnapshotUsed: false,
+      liveProviderUsed: true,
+      sourceLabel: "Live",
+      sourceProof,
+      liveRecordCount: rawOpportunities.length,
+      fallbackRecordCount: 0
     },
+    normalizedProducts: [],
+    evidenceRefs: [],
     executiveRecommendation: recommendations[0],
     opportunities: recommendations,
     assistantFindings,
@@ -398,7 +448,8 @@ async function main() {
         risk: "medium" as const
       }
     ],
-    demoMode: true
+    usedFallback: false,
+    demoMode: false
   };
 
   await Promise.all([
@@ -473,14 +524,25 @@ async function main() {
       alertState: "normal" as const
     },
     {
-      assistantId: "risk" as const,
+      assistantId: "coordinator" as const,
       usageCount: 1,
       creditLimit: 100,
       creditsUsed: 5,
       estimatedUsageCost: 0.5,
       lastRun: now,
-      latestContribution: "Reviewed confidence, risk exposure, and validation readiness.",
-      dataSourcesUsed: ["Bright Data opportunity scores", "AMI risk rubric"],
+      latestContribution: "Synthesized imported specialist signals into decision factors and risk checks.",
+      dataSourcesUsed: ["Specialist assistant outputs", "Bright Data opportunity scores"],
+      alertState: "normal" as const
+    },
+    {
+      assistantId: "strategy" as const,
+      usageCount: 1,
+      creditLimit: 100,
+      creditsUsed: 6,
+      estimatedUsageCost: 0.6,
+      lastRun: now,
+      latestContribution: "Produced the final AMI recommendation and validation next step.",
+      dataSourcesUsed: ["Coordinator synthesis", "Final strategy payload"],
       alertState: "normal" as const
     }
   ];

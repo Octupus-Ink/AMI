@@ -31,7 +31,17 @@ export const AnalysisStatusSchema = z.enum([
   "skipped",
   "fallback"
 ]);
-export const SourceModeSchema = z.enum(["live", "demo_fallback", "demo_snapshot", "not_configured", "error"]);
+export const SourceModeSchema = z.enum(["pending", "live", "demo_fallback", "mixed", "error", "demo_snapshot", "not_configured"]);
+export const SourceProviderStatusSchema = z.enum(["pending", "live_success", "fallback_used", "partial_fallback", "failed"]);
+export const SourceProofItemSchema = z.object({
+  title: z.string().min(1),
+  sourceType: z.enum(["brightdata", "provider", "demo_fallback", "manual", "unknown"]),
+  sourceMode: z.enum(["live", "demo_fallback", "mixed"]),
+  sourceUrl: z.string().url().nullable(),
+  collectedAt: z.string().min(1),
+  snippet: z.string().nullable(),
+  isFallback: z.boolean()
+});
 export const BusinessGoalSchema = z.enum(["discover_new_products", "stock_optimization", "revenue_stock_opportunities"]);
 export const InventorySourceStatusSchema = z.enum([
   "not_connected",
@@ -163,9 +173,11 @@ export const EvidencePackageSchema = z.object({
   evidencePackageId: z.string(),
   sourceMarketplace: z.string(),
   sourceType: z.string(),
-  sourceUrl: z.string().url().optional(),
+  sourceUrl: z.string().url().nullable().optional(),
   brightDataProduct: z.enum(["MCP Server", "Web Scraper API", "SERP API", "Web Unlocker", "Scraping Browser", "Scraper Studio"]),
   brightDataMode: SourceModeSchema,
+  sourceMode: SourceModeSchema.optional(),
+  isFallback: z.boolean().default(false),
   scrapedAt: z.string(),
   productIdentity: z.string(),
   currentPrice: z.number().nonnegative(),
@@ -277,6 +289,8 @@ export const RecommendationSchema = z.object({
   suggestedNextStep: z.string().min(4),
   assistantContributions: z.array(AssistantContributionSchema).min(1),
   evidencePackageId: z.string(),
+  sourceMode: SourceModeSchema.optional(),
+  fallbackUsed: z.boolean().default(false),
   status: z.enum(["new", "saved", "approved", "exported"]).default("new"),
   createdAt: z.string()
 });
@@ -294,8 +308,15 @@ export const AnalysisResultSchema = z.object({
     mode: SourceModeSchema,
     label: z.string(),
     collectedAt: z.string(),
-    providerStatus: z.string().optional(),
+    providerStatus: z.union([SourceProviderStatusSchema, z.string()]).default("pending"),
     usedFallback: z.boolean().default(false),
+    fallbackUsed: z.boolean().default(false),
+    demoSnapshotUsed: z.boolean().default(false),
+    liveProviderUsed: z.boolean().default(false),
+    sourceLabel: z.string().default("Checking provider"),
+    sourceProof: z.array(SourceProofItemSchema).default([]),
+    liveRecordCount: z.number().int().nonnegative().default(0),
+    fallbackRecordCount: z.number().int().nonnegative().default(0),
     fallbackReason: z.string().optional(),
     maxResults: z.number().int().positive().optional()
   }),
@@ -371,6 +392,8 @@ export type RiskLevel = z.infer<typeof RiskLevelSchema>;
 export type ConfidenceLevel = z.infer<typeof ConfidenceLevelSchema>;
 export type SignalStrength = z.infer<typeof SignalStrengthSchema>;
 export type SourceMode = z.infer<typeof SourceModeSchema>;
+export type SourceProviderStatus = z.infer<typeof SourceProviderStatusSchema>;
+export type SourceProofItem = z.infer<typeof SourceProofItemSchema>;
 export type InventoryConnectionType = z.infer<typeof InventoryConnectionTypeSchema>;
 export type InventorySourceStatus = z.infer<typeof InventorySourceStatusSchema>;
 export type RegisterPayload = z.infer<typeof RegisterPayloadSchema>;

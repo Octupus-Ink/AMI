@@ -7,6 +7,7 @@ import {
 } from "@/lib/schemas/agents";
 import type { AgentContext } from "@/lib/agents/types";
 import { buildExternalActionPayload } from "@/lib/analysis/external-action-payload";
+import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle } from "@/lib/analysis/source-state";
 import { generateVerdictJson } from "@/lib/llm-providers/aimlapi/structured-json";
 
 function fallbackVerdict(
@@ -65,8 +66,8 @@ export async function runVerdictAgent(
     evidence: context.evidenceRefs.slice(0, 10).map((ref) => ({
       id: ref.id,
       sourceType: ref.sourceType,
-      label: ref.label,
-      snippet: ref.snippet
+      label: sanitizeEvidenceTitle(ref.label),
+      snippet: sanitizeEvidenceSnippet(ref.snippet)
     })),
     findings,
     synthesis,

@@ -1,6 +1,7 @@
 import type { EvidencePackage, MarketContextPayload, NormalizedProduct, SourceMode } from "@/lib/schemas/ami";
 import { EvidencePackageSchema } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
+import { sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
 
 function confidenceLabel(value: number | undefined): "low" | "medium" | "high" {
   if ((value ?? 0) >= 0.78) {
@@ -48,21 +49,35 @@ export function buildEvidencePackages(
 ): EvidencePackage[] {
   const primary = products[0];
   const primaryRef = evidenceRefs.find((ref) => primary?.evidenceRefs.includes(ref.id)) ?? evidenceRefs[0];
+  const sourceUrl = toHttpSourceUrl(primaryRef?.url);
+  const isFallback = mode === "demo_fallback" || mode === "demo_snapshot" || mode === "mixed";
+  const sourceType =
+    mode === "live"
+      ? "bright_data_live_web_data"
+      : mode === "error" || mode === "not_configured"
+        ? "provider_unavailable"
+        : "bright_data_demo_fallback_snapshot";
+  const demandIndicators = evidenceRefs
+    .slice(0, 3)
+    .map((ref) => sanitizeEvidenceSnippet(ref.snippet ?? ref.label, 180))
+    .filter((item): item is string => Boolean(item));
 
   return [
     EvidencePackageSchema.parse({
       evidencePackageId: primaryRef?.id ?? `evidence_${scrapedAt}`,
       sourceMarketplace: context.targetMarketplace,
-      sourceType: mode === "live" ? "bright_data_live_web_data" : "bright_data_demo_fallback_snapshot",
-      sourceUrl: primaryRef?.url,
+      sourceType,
+      ...(sourceUrl ? { sourceUrl } : {}),
       brightDataProduct,
       brightDataMode: mode,
+      sourceMode: mode,
+      isFallback,
       scrapedAt,
       productIdentity: primary?.title ?? context.productName,
       currentPrice: primary?.priceUsd ?? primary?.price ?? 0,
       supplierPrice: primary?.supplierPrice ?? 0,
       estimatedMargin: primary?.estimatedMargin ?? 0,
-      demandIndicators: evidenceRefs.slice(0, 3).map((ref) => ref.snippet ?? ref.label),
+      demandIndicators: demandIndicators.length ? demandIndicators : ["No visible source evidence available"],
       socialMomentum: signalLabel(primary?.trendMomentum),
       competitionLevel: competitionLevel(primary?.pricePressure),
       matchQuality: confidenceLabel(primary?.matchConfidence),

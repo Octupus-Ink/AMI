@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, CircleDashed, DatabaseZap, Radar, ShieldAlert } from "lucide-react";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { StatusDot } from "@/components/ui/StatusDot";
+import { sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
 import {
   MarketContextPayloadSchema,
   VisibleAssistants,
@@ -56,14 +57,30 @@ const latestActivity = VisibleAssistants.reduce(
 );
 
 const processingMessages = [
-  "Collecting marketplace and demand signals",
-  "Comparing supplier options",
-  "Evaluating inventory posture",
+  "Checking live provider",
+  "Collecting live marketplace data",
+  "Normalizing provider data",
   "Resolving assistant recommendations",
   "Preparing AMI Strategy"
 ];
 
 function formatMode(mode: SourceMode) {
+  if (mode === "pending") {
+    return "Pending";
+  }
+
+  if (mode === "demo_fallback" || mode === "demo_snapshot") {
+    return "Demo fallback";
+  }
+
+  if (mode === "mixed") {
+    return "Mixed";
+  }
+
+  if (mode === "error" || mode === "not_configured") {
+    return "Provider failed";
+  }
+
   return mode
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -71,7 +88,14 @@ function formatMode(mode: SourceMode) {
 }
 
 function assistantStateFromResult(status: string | undefined): AssistantState {
-  if (status === "completed" || status === "warning" || status === "failed" || status === "skipped" || status === "running") {
+  if (
+    status === "completed" ||
+    status === "warning" ||
+    status === "failed" ||
+    status === "skipped" ||
+    status === "running" ||
+    status === "fallback"
+  ) {
     return status;
   }
 
@@ -116,6 +140,10 @@ function logProcessing(message: string, details?: Record<string, unknown>) {
   }
 }
 
+function safeStatusMessage(value: string) {
+  return sanitizeEvidenceSnippet(value, 360) ?? "Provider status unavailable";
+}
+
 export function ProcessingClient() {
   const router = useRouter();
   const abortRef = useRef<AbortController | null>(null);
@@ -123,7 +151,7 @@ export function ProcessingClient() {
   const [assistantStates, setAssistantStates] = useState(initialStates);
   const [activity, setActivity] = useState(latestActivity);
   const [sourceStatus, setSourceStatus] = useState(processingMessages[0]);
-  const [sourceMode, setSourceMode] = useState<SourceMode>("demo_snapshot");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("pending");
   const [message, setMessage] = useState("");
   const [isPreparingStrategy, setIsPreparingStrategy] = useState(false);
   const [latestResult, setLatestResult] = useState<AnalysisResult | null>(null);
@@ -228,8 +256,8 @@ export function ProcessingClient() {
         ...current,
         ...Object.fromEntries(statusRows.map((row) => [row.agentType, row.latestActivity ?? assistantSeedActivity(row.agentType)]))
       }));
-      setSourceMode(result.sourceCollectionStatus?.mode ?? "demo_fallback");
-      setSourceStatus(result.sourceCollectionStatus?.label ?? "Source collection completed");
+      setSourceMode(result.sourceCollectionStatus?.mode ?? "pending");
+      setSourceStatus(result.sourceCollectionStatus?.label ?? result.sourceCollectionStatus?.sourceLabel ?? "Source collection completed");
       setLatestResult(result);
 
       if (result.status === "metrics_ready") {
@@ -241,7 +269,7 @@ export function ProcessingClient() {
       }
 
       if (result.warnings?.length) {
-        setMessage(result.warnings[0]);
+        setMessage(safeStatusMessage(result.warnings[0]));
       }
     }
 
@@ -300,7 +328,7 @@ export function ProcessingClient() {
           }
 
           const errorMessage = error instanceof Error ? error.message : "AMI polling failed.";
-          setMessage(errorMessage);
+          setMessage(safeStatusMessage(errorMessage));
           logProcessing("analysis polling failed", { reason: errorMessage });
         }
       }, 1200);
@@ -378,7 +406,7 @@ export function ProcessingClient() {
         setProgress(100);
         setAssistantStates(failedStartStates(errorMessage));
         setSourceStatus("Analysis failed");
-        setMessage(errorMessage);
+        setMessage(safeStatusMessage(errorMessage));
         logProcessing("analysis failed", { reason: errorMessage });
       }
     }

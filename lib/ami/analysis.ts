@@ -19,6 +19,7 @@ import {
 import { buildGraphData } from "@/lib/analysis/graph-data";
 import { extractPreliminaryMetrics } from "@/lib/analysis/kpi-extraction";
 import { buildEvidencePackages } from "@/lib/analysis/evidence";
+import { normalizeVisibleEvidenceItems, resolveSourceState } from "@/lib/analysis/source-state";
 import { collectBrightDataEvidence } from "@/lib/data-providers/brightdata/client";
 import { buildAgentStatus, buildPendingAgentStatus, runAmiAgents } from "@/lib/agents/orchestrator";
 import type { AgentContext } from "@/lib/agents/types";
@@ -67,26 +68,6 @@ function riskForLegacy(risk: RiskLevel): "low" | "medium" | "high" {
   }
 
   return risk;
-}
-
-function modeFromCollection(status: string, usedFallback: boolean): SourceMode {
-  if (usedFallback) {
-    return "demo_fallback";
-  }
-
-  if (status === "live") {
-    return "live";
-  }
-
-  if (status === "not_configured") {
-    return "not_configured";
-  }
-
-  if (status === "error") {
-    return "error";
-  }
-
-  return "demo_fallback";
 }
 
 function fallbackVerdict(analysisRunId: string, context: MarketContextPayload, products: NormalizedProduct[]): VerdictAgentOutput {
@@ -152,6 +133,15 @@ function contributionFromOutput(output: AgentOutput, sourceMode: SourceMode): As
   const finding = "finding" in output ? output.finding : "summary" in output ? output.summary : output.finalVerdict;
   const reason = "summary" in output ? output.summary : output.reasoning;
 
+  const sourceDescription =
+    sourceMode === "live"
+      ? "Bright Data live normalized evidence"
+      : sourceMode === "mixed"
+        ? "Bright Data live evidence with partial fallback"
+        : sourceMode === "demo_fallback" || sourceMode === "demo_snapshot"
+          ? "Bright Data-shaped fallback evidence"
+          : "Provider status evidence";
+
   return {
     assistantId: output.agentType,
     summary: reason,
@@ -159,10 +149,7 @@ function contributionFromOutput(output: AgentOutput, sourceMode: SourceMode): As
     signalStrength: output.confidence >= 0.75 ? "strong" : output.confidence >= 0.55 ? "moderate" : "weak",
     confidence: confidenceLevel(output.confidence),
     risk: riskForLegacy(output.riskLevel),
-    dataSourcesUsed: [
-      sourceMode === "live" ? "Bright Data live normalized evidence" : "Bright Data-shaped fallback evidence",
-      output.status === "fallback" ? "Deterministic agent fallback" : "Compact KPI evidence"
-    ],
+    dataSourcesUsed: [sourceDescription, output.status === "fallback" ? "Deterministic assistant output" : "Compact KPI evidence"],
     usageCost: usageCost[output.agentType] ?? 0.2
   };
 }
@@ -178,9 +165,23 @@ function findingFromOutput(output: AgentOutput, sourceMode: SourceMode): Assista
     signal: output.confidence >= 0.75 ? "strong" : output.confidence >= 0.55 ? "moderate" : "weak",
     confidence: confidenceLevel(output.confidence),
     risk: riskForLegacy(output.riskLevel),
-    sourceType: sourceMode === "live" ? "Bright Data live data" : "Bright Data fallback data",
-    sourceLabel: output.status === "fallback" ? "Fallback agent output" : "Normalized KPI evidence",
-    dataFreshness: sourceMode === "live" ? "Collected during this analysis run" : "Deterministic fallback generated during this run"
+    sourceType:
+      sourceMode === "live"
+        ? "Bright Data live data"
+        : sourceMode === "mixed"
+          ? "Mixed provider data"
+          : sourceMode === "demo_fallback" || sourceMode === "demo_snapshot"
+            ? "Bright Data fallback data"
+            : "Provider status data",
+    sourceLabel: output.status === "fallback" ? "Deterministic assistant output" : "Normalized KPI evidence",
+    dataFreshness:
+      sourceMode === "live"
+        ? "Collected during this analysis run"
+        : sourceMode === "mixed"
+          ? "Collected during this run with partial fallback"
+          : sourceMode === "demo_fallback" || sourceMode === "demo_snapshot"
+            ? "Deterministic fallback generated during this run"
+            : "Provider did not return live evidence"
   });
 }
 
@@ -216,6 +217,8 @@ function buildRecommendation(
     suggestedNextStep: verdict.nextStep,
     assistantContributions: outputs.map((output) => contributionFromOutput(output, sourceMode)),
     evidencePackageId: evidencePackage.evidencePackageId,
+    sourceMode,
+    fallbackUsed: sourceMode === "demo_fallback" || sourceMode === "demo_snapshot" || sourceMode === "mixed",
     status: "new",
     createdAt: new Date().toISOString()
   });
@@ -245,7 +248,13 @@ export async function createAnalysisRunToMetrics(
   const analysisRunId = randomUUID();
   const startedAt = new Date().toISOString();
   const collection = await collectBrightDataEvidence(context);
-  const sourceMode = modeFromCollection(collection.status, collection.usedFallback);
+  const sourceState = resolveSourceState({
+    status: collection.status,
+    usedFallback: collection.usedFallback,
+    products: collection.products,
+    evidenceRefs: collection.evidenceRefs
+  });
+  const sourceMode = sourceState.mode;
   const metrics = extractPreliminaryMetrics(collection.products, collection.evidenceRefs.length);
   const graphData = buildGraphData(collection.products, metrics);
   const evidencePackages = buildEvidencePackages(
@@ -269,6 +278,7 @@ export async function createAnalysisRunToMetrics(
     pendingOutputs
   );
   const agentStatus = buildPendingAgentStatus();
+  const sourceProof = normalizeVisibleEvidenceItems(collection.evidenceRefs, sourceState, collection.collectedAt);
   const warnings = [
     ...collection.warnings,
     inventoryContext.warningMessage
@@ -278,7 +288,7 @@ export async function createAnalysisRunToMetrics(
     analysisRunId,
     workspaceId,
     marketContext: context,
-    status: collection.status === "error" && !collection.usedFallback ? "failed" : "metrics_ready",
+    status: sourceMode === "error" ? "failed" : "metrics_ready",
     startedAt,
     assistantStatus: assistantStatusRecord(agentStatus),
     sourceCollectionStatus: {
@@ -286,9 +296,16 @@ export async function createAnalysisRunToMetrics(
       mode: sourceMode,
       label: collection.label,
       collectedAt: collection.collectedAt,
-      providerStatus: collection.status,
-      usedFallback: collection.usedFallback,
-      fallbackReason: collection.fallbackReason,
+      providerStatus: sourceState.providerStatus,
+      usedFallback: sourceState.fallbackUsed,
+      fallbackUsed: sourceState.fallbackUsed,
+      demoSnapshotUsed: sourceState.demoSnapshotUsed,
+      liveProviderUsed: sourceState.liveProviderUsed,
+      sourceLabel: sourceState.sourceLabel,
+      sourceProof,
+      liveRecordCount: sourceState.liveRecordCount,
+      fallbackRecordCount: sourceState.fallbackRecordCount,
+      fallbackReason: sourceState.fallbackUsed || sourceMode === "error" ? collection.fallbackReason : undefined,
       maxResults: collection.maxResults
     },
     normalizedProducts: collection.products,
@@ -300,15 +317,15 @@ export async function createAnalysisRunToMetrics(
     synthesis: undefined,
     finalVerdict: undefined,
     externalActionPayload: pendingVerdict.externalActionPayload,
-    usedFallback: collection.usedFallback,
-    fallbackReason: collection.fallbackReason,
+    usedFallback: sourceState.fallbackUsed,
+    fallbackReason: sourceState.fallbackUsed || sourceMode === "error" ? collection.fallbackReason : undefined,
     executiveRecommendation,
     opportunities: [executiveRecommendation, secondaryRecommendation(executiveRecommendation, context)],
     assistantFindings: [],
     evidencePackages,
     supplierOptions: buildSupplierOptions(context, collection.products),
     warnings,
-    demoMode: collection.usedFallback
+    demoMode: sourceState.demoSnapshotUsed
   });
 }
 
@@ -352,7 +369,12 @@ export async function completeAnalysisRun(metricsRun: AnalysisResult): Promise<A
     outputs
   );
   const agentStatus = buildAgentStatus(outputs);
-  const usedFallback = metricsRun.usedFallback || agentResult.usedFallback;
+  const sourceFallbackUsed = Boolean(
+    metricsRun.sourceCollectionStatus.fallbackUsed ??
+      metricsRun.sourceCollectionStatus.usedFallback ??
+      metricsRun.sourceCollectionStatus.demoSnapshotUsed
+  );
+  const usedFallback = sourceFallbackUsed || agentResult.usedFallback;
   const warnings = [...metricsRun.warnings, ...agentResult.warnings].filter(Boolean);
 
   return AnalysisResultSchema.parse({
@@ -370,8 +392,8 @@ export async function completeAnalysisRun(metricsRun: AnalysisResult): Promise<A
     assistantFindings: outputs.map((output) => findingFromOutput(output, sourceMode)),
     warnings,
     usedFallback,
-    fallbackReason: usedFallback ? warnings[0] ?? metricsRun.fallbackReason : undefined,
-    demoMode: usedFallback
+    fallbackReason: sourceFallbackUsed ? metricsRun.fallbackReason : agentResult.usedFallback ? agentResult.warnings[0] : undefined,
+    demoMode: sourceFallbackUsed
   });
 }
 

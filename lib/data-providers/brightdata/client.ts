@@ -1,6 +1,7 @@
 import type { MarketContextPayload } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import type { NormalizedProduct } from "@/lib/schemas/ami";
+import { sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
 import { createFallbackProducts, normalizeBrightDataPayload } from "@/lib/data-providers/brightdata/normalize";
 import type {
   BrightDataAttempt,
@@ -232,7 +233,7 @@ async function attemptWebUnlocker(
             {
               title: context.productName,
               url,
-              snippet: payload.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 320),
+              snippet: sanitizeEvidenceSnippet(payload) ?? `${context.productName} observed through Web Unlocker.`,
               sourceMarketplace: context.targetMarketplace
             }
           ]
