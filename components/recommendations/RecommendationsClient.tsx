@@ -739,6 +739,11 @@ export function RecommendationsClient() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [selectedId, setSelectedId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<StrategyTab>("Product Candidates");
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(() => new Set());
+  const [selectedPromoIds, setSelectedPromoIds] = useState<Set<string>>(() => new Set());
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(() => new Set());
+  const [selectedSupplierIds, setSelectedSupplierIds] = useState<Set<string>>(() => new Set());
+  const [exportPlaceholderMessage, setExportPlaceholderMessage] = useState<string>("");
 
   useEffect(() => {
     async function load() {
@@ -876,6 +881,40 @@ export function RecommendationsClient() {
         </div>
       </Section>
 
+      <Section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Partner’s Choice</p>
+            <p className="mt-2 text-sm font-semibold text-slate-950">
+              {`Partner’s Choice: ${selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size} selected ${selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size === 1 ? "item" : "items"} | ${selectedSupplierIds.size} ${selectedSupplierIds.size === 1 ? "supplier" : "suppliers"}`}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              {selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size > 0
+                ? "Review selections before exporting the final report."
+                : "Select product candidates, actions, or suppliers to prepare Partner’s Choice."}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size > 0) {
+                  setExportPlaceholderMessage("Report export is not connected yet.");
+                }
+              }}
+              disabled={selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size === 0}
+              className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Export AMI Report
+            </button>
+            {exportPlaceholderMessage ? (
+              <p className="text-xs leading-5 text-slate-600">{exportPlaceholderMessage}</p>
+            ) : null}
+          </div>
+        </div>
+      </Section>
+
       <Section>
         <div className="flex flex-wrap gap-2 border-b border-slate-200">
           {strategyTabs.map((tab) => (
@@ -895,7 +934,21 @@ export function RecommendationsClient() {
         </div>
 
         <Surface className="mt-5">
-          <ActiveTabContent activeTab={activeTab} analysis={analysis} selected={selected} evidence={evidence} suppliers={suppliers} />
+          <ActiveTabContent
+            activeTab={activeTab}
+            analysis={analysis}
+            selected={selected}
+            evidence={evidence}
+            suppliers={suppliers}
+            selectedProductIds={selectedProductIds}
+            selectedPromoIds={selectedPromoIds}
+            selectedInventoryIds={selectedInventoryIds}
+            selectedSupplierIds={selectedSupplierIds}
+            setSelectedProductIds={setSelectedProductIds}
+            setSelectedPromoIds={setSelectedPromoIds}
+            setSelectedInventoryIds={setSelectedInventoryIds}
+            setSelectedSupplierIds={setSelectedSupplierIds}
+          />
         </Surface>
       </Section>
 
@@ -925,17 +978,30 @@ function ActiveTabContent({
   analysis,
   selected,
   evidence,
-  suppliers
+  suppliers,
+  selectedProductIds,
+  selectedPromoIds,
+  selectedInventoryIds,
+  selectedSupplierIds,
+  setSelectedProductIds,
+  setSelectedPromoIds,
+  setSelectedInventoryIds,
+  setSelectedSupplierIds
 }: {
   activeTab: StrategyTab;
   analysis: AnalysisResult;
   selected: AnalysisResult["executiveRecommendation"];
   evidence: AnalysisResult["evidencePackages"][number] | undefined;
   suppliers: SupplierOption[];
+  selectedProductIds: Set<string>;
+  selectedPromoIds: Set<string>;
+  selectedInventoryIds: Set<string>;
+  selectedSupplierIds: Set<string>;
+  setSelectedProductIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedPromoIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedInventoryIds: Dispatch<SetStateAction<Set<string>>>;
+  setSelectedSupplierIds: Dispatch<SetStateAction<Set<string>>>;
 }) {
-  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(() => new Set());
-  const [selectedPromoIds, setSelectedPromoIds] = useState<Set<string>>(() => new Set());
-  const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(() => new Set());
   const [productPage, setProductPage] = useState(0);
   const [promoPage, setPromoPage] = useState(0);
   const [inventoryPage, setInventoryPage] = useState(0);
@@ -951,7 +1017,6 @@ function ActiveTabContent({
   );
   const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
   const [supplierDrawer, setSupplierDrawer] = useState<SupplierDrawerDetail | null>(null);
-  const [selectedSupplierIds, setSelectedSupplierIds] = useState<Set<string>>(() => new Set());
 
   const handleSupplierToggle = (supplierId: string, checked: boolean) => {
     if (hasExactSupplierProductMapping()) {
