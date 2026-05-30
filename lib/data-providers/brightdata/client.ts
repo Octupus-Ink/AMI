@@ -107,7 +107,9 @@ export function getBrightDataConfig(): BrightDataConfig {
     amazonProductsDiscoverType: process.env.BRIGHT_DATA_AMAZON_PRODUCTS_DISCOVER_TYPE?.trim(),
     amazonProductsDiscoverBy: process.env.BRIGHT_DATA_AMAZON_PRODUCTS_DISCOVER_BY?.trim(),
     amazonProductsInputKey: process.env.BRIGHT_DATA_AMAZON_PRODUCTS_INPUT_KEY?.trim(),
-    ebayDatasetId: process.env.BRIGHT_DATA_EBAY_DATASET_ID?.trim(),
+    // Accept BRIGHT_DATA_EBAY_KEYWORD_DATASET_ID (current name); keep
+    // BRIGHT_DATA_EBAY_DATASET_ID as a backward-compatible alias.
+    ebayDatasetId: process.env.BRIGHT_DATA_EBAY_KEYWORD_DATASET_ID?.trim() || process.env.BRIGHT_DATA_EBAY_DATASET_ID?.trim(),
     ebayKeywordDiscoverType: process.env.BRIGHT_DATA_EBAY_KEYWORD_DISCOVER_TYPE?.trim(),
     ebayKeywordDiscoverBy: process.env.BRIGHT_DATA_EBAY_KEYWORD_DISCOVER_BY?.trim(),
     ebayKeywordInputKey: process.env.BRIGHT_DATA_EBAY_KEYWORD_INPUT_KEY?.trim(),

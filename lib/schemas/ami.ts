@@ -411,6 +411,10 @@ export const SupplierOptionSchema = z.object({
   isFallback: z.boolean().default(false)
 });
 
+// Explicit supplier-native source status. Must be derived from the supplier
+// sources actually attempted, never inferred from `supplierOptions.length === 0`.
+export const SupplierSourceStatusSchema = z.enum(["not_attempted", "success", "partial", "empty", "failed"]);
+
 export const NormalizedProductSchema = z.object({
   source: z.string().min(1),
   externalId: z.string().optional(),
@@ -605,6 +609,13 @@ export const AnalysisResultSchema = z.object({
   assistantFindings: z.array(AssistantFindingSchema),
   evidencePackages: z.array(EvidencePackageSchema).min(1),
   supplierOptions: z.array(SupplierOptionSchema).default([]),
+  // Authoritative supplier-native source state (derived from attempted sources,
+  // not from supplierOptions.length). Optional so already-persisted runs parse.
+  supplierSourceStatus: SupplierSourceStatusSchema.optional(),
+  supplierSourcesPlanned: z.array(z.string()).default([]),
+  supplierSourcesAttempted: z.array(z.string()).default([]),
+  supplierMissingSignals: z.array(z.string()).default([]),
+  supplierSourceReason: z.string().optional(),
   warnings: z.array(z.string()).default([]),
   demoMode: z.boolean()
 });
@@ -688,6 +699,7 @@ export type AssistantContribution = z.infer<typeof AssistantContributionSchema>;
 export type AssistantFinding = z.infer<typeof AssistantFindingSchema>;
 export type EvidencePackage = z.infer<typeof EvidencePackageSchema>;
 export type SupplierOption = z.infer<typeof SupplierOptionSchema>;
+export type SupplierSourceStatus = z.infer<typeof SupplierSourceStatusSchema>;
 export type NormalizedProduct = z.infer<typeof NormalizedProductSchema>;
 export type PreliminaryMetrics = z.infer<typeof PreliminaryMetricsSchema>;
 export type GraphData = z.infer<typeof GraphDataSchema>;
