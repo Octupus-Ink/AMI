@@ -140,14 +140,12 @@ export function StartAccessClient() {
           </p>
         </div>
 
-        <section className="w-full shrink-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm lg:max-w-md">
+        <section className="w-full shrink-0 rounded-2xl border border-[var(--border)] bg-[var(--surface-raised)] px-8 py-8 shadow-lg shadow-slate-200/50 lg:max-w-md">
           {mode === "login" ? (
-            <form onSubmit={submitLogin} className="space-y-4">
-              <div>
-                <h2 className="text-2xl font-semibold text-slate-950">Enter AMI with a prepared workspace</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Use an existing workspace or start the prepared demo flow.
-                </p>
+            <form onSubmit={submitLogin} className="space-y-6">
+              <div className="space-y-2">
+                <p className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--text-tertiary)]">Welcome back</p>
+                <h2 className="text-2xl font-semibold tracking-tight text-[var(--text)]">Sign in to your workspace</h2>
               </div>
               <Field
                 label="Email or workspace ID"
@@ -163,21 +161,21 @@ export function StartAccessClient() {
               <button
                 type="submit"
                 disabled={busy}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-teal-200 bg-[var(--accent-light)] px-4 py-2.5 text-sm font-medium text-teal-800 shadow-sm shadow-teal-100/50 transition-all duration-150 hover:-translate-y-[1px] hover:border-teal-300 hover:bg-teal-100 hover:text-teal-900 hover:shadow-md hover:shadow-teal-100/70 active:translate-y-0 active:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
               >
                 <LockKeyhole size={18} />
                 Log in
               </button>
-              <div className="flex items-center gap-3 text-xs font-semibold uppercase text-slate-400">
-                <span className="h-px flex-1 bg-slate-200" />
-                or
-                <span className="h-px flex-1 bg-slate-200" />
+              <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.24em] text-[var(--text-tertiary)]">
+                <span className="h-px flex-1 bg-[var(--border-subtle)]" />
+                <span>or</span>
+                <span className="h-px flex-1 bg-[var(--border-subtle)]" />
               </div>
               <button
                 type="button"
                 disabled={busy}
                 onClick={submitDemo}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-teal-200/50 transition-all duration-150 hover:-translate-y-[1px] hover:bg-[var(--accent-hover)] hover:shadow-md hover:shadow-teal-200/70 active:translate-y-0 active:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
               >
                 <Play size={18} />
                 Start Demo Analysis
@@ -188,11 +186,9 @@ export function StartAccessClient() {
             </form>
           ) : (
             <form id="new-workspace" onSubmit={submitRegister} className="space-y-5">
-              <div>
-                <h2 className="text-2xl font-semibold text-slate-950">Create a new workspace</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Set up the workspace context AMI will use for future briefings.
-                </p>
+              <div className="space-y-2">
+                <p className="text-xs font-medium uppercase tracking-[0.24em] text-[var(--text-tertiary)]">Create your workspace</p>
+                <h2 className="text-2xl font-semibold tracking-tight text-[var(--text)]">Get started with AMI</h2>
               </div>
               <div className="flex flex-wrap gap-4">
                 <Field label="Name" value={register.name} onChange={(value) => setRegister((current) => ({ ...current, name: value }))} />
@@ -257,7 +253,7 @@ export function StartAccessClient() {
               <button
                 type="submit"
                 disabled={busy}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-800"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-teal-200/50 transition hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <UserPlus size={18} />
                 Create AMI Workspace
@@ -266,7 +262,11 @@ export function StartAccessClient() {
             </form>
           )}
 
-          {message && <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</p>}
+          {message && (
+            <p className="mt-4 rounded-lg border border-amber-200 bg-[var(--warning-light)] px-4 py-3 text-sm text-amber-800">
+              {message}
+            </p>
+          )}
         </section>
       </section>
     </main>
@@ -286,13 +286,13 @@ function Field({
 }) {
   return (
     <label className="block min-w-48 flex-1">
-      <span className="text-xs font-semibold uppercase text-slate-500">{label}</span>
+      <span className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">{label}</span>
       <input
         required
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+        className="mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3.5 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-tertiary)] outline-none transition-colors focus:border-[var(--accent)] focus:ring-2 focus:ring-teal-500/20"
       />
     </label>
   );
