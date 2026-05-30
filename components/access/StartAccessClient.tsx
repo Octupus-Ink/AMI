@@ -125,7 +125,7 @@ export function StartAccessClient() {
   }
 
   return (
-    <main className="ami-home-canvas relative isolate flex min-h-[calc(100vh-72px)] items-center overflow-hidden">
+    <main className="ami-home-canvas relative isolate flex min-h-[calc(100vh-72px)] items-center overflow-hidden px-4 sm:px-6 lg:px-8">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
@@ -134,7 +134,7 @@ export function StartAccessClient() {
         <div className="ami-home-orb ami-home-orb-b" />
         <div className="ami-home-orb ami-home-orb-c" />
       </div>
-      <section className="mx-auto flex min-h-[65vh] w-full max-w-7xl flex-col items-start z-1 justify-center gap-10 py-10 lg:flex-row lg:gap-16">
+      <section className="relative z-10 mx-auto flex min-h-[65vh] w-full max-w-7xl flex-col items-start justify-center gap-10 py-10 lg:flex-row lg:gap-16">
         <div className="flex min-w-0 flex-1 flex-col justify-center items-flex-start">
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-950 text-base font-bold text-white">
             AMI
