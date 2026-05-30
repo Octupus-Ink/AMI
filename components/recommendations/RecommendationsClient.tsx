@@ -1560,6 +1560,7 @@ function ActiveTabContent({
             />
             <p className="text-sm text-slate-600">{formatSupplierSelectedCount(selectedSupplierIds.size)}</p>
           </div>
+          <p className="mb-4 text-xs text-[var(--text-tertiary)]">{suppliers.length} suppliers found · ranked by match confidence</p>
           {selectedProductIds.size > 0 ? (
             <p className="mt-3 text-sm text-slate-600">
               Supplier coverage is currently scoped to selected product candidates.
@@ -1612,6 +1613,24 @@ function ActiveTabContent({
         />
         <BrightDataPill />
       </div>
+
+      {/* lightweight context line: evidence sources and assistant list */}
+      {(() => {
+        const sourcesCount = analysis.evidenceRefs?.length ?? analysis.evidencePackages?.length ?? 0;
+        const assistantNames = selected.assistantContributions
+          .map((c) => VisibleAssistants.find((item) => item.id === c.assistantId)?.name)
+          .filter(Boolean) as string[];
+
+        if (assistantNames.length > 0) {
+          return (
+            <p className="mb-4 text-xs text-[var(--text-tertiary)]">{sourcesCount} sources · from {assistantNames.join(", ")}</p>
+          );
+        }
+
+        return (
+          <p className="mb-4 text-xs text-[var(--text-tertiary)]">{sourcesCount} sources · from available assistant evidence</p>
+        );
+      })()}
 
       <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4" open>
         <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
@@ -1729,6 +1748,23 @@ function SelectablePaginatedTab({
         <TabHeader title={title} description={description} />
         <p className="text-sm text-slate-600">{selectedIds.size} selected</p>
       </div>
+
+      {/* lightweight context line for clarity (low emphasis) */}
+      {(() => {
+        if (title === "Product Candidates") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} product opportunities · ranked by confidence</p>;
+        }
+
+        if (title === "Promo Candidates") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} promo opportunities · ranked by margin potential</p>;
+        }
+
+        if (title === "Inventory Actions") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} inventory actions · ranked by urgency</p>;
+        }
+
+        return null;
+      })()}
 
       {total === 0 ? (
         <div className="mt-4">{emptyState}</div>

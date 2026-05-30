@@ -128,29 +128,29 @@ export function MarketContextClient() {
 
       <Surface className="mt-7">
         <StatusStrip>
-            <div className="flex items-start gap-3">
-              <Database className="mt-0.5 text-teal-700" size={20} />
-              <div>
-                <p className="text-sm font-semibold text-slate-950">
-                  {inventoryConnected ? "Inventory connected" : "Inventory not connected"}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  {inventoryConnected
-                    ? `Latest sync: ${
-                        inventoryStatus.lastSyncAt ? new Date(inventoryStatus.lastSyncAt).toLocaleString() : "Demo snapshot"
-                      }`
-                    : "Connect inventory to give AMI operational context."}
-                </p>
-              </div>
+          <div className="flex items-start gap-3">
+            <Database className="mt-0.5 text-teal-700" size={20} />
+            <div>
+              <p className="text-sm font-semibold text-slate-950">
+                {inventoryConnected ? "Inventory connected" : "Inventory not connected"}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {inventoryConnected
+                  ? `Latest sync: ${
+                      inventoryStatus.lastSyncAt ? new Date(inventoryStatus.lastSyncAt).toLocaleString() : "Demo snapshot"
+                    }`
+                  : "Connect inventory to give AMI operational context."}
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => router.push("/account-workspace#marketplace-setup")}
-              className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800"
-            >
-              {inventoryConnected ? <RefreshCw size={16} /> : <LinkIcon size={16} />}
-              {inventoryConnected ? "Re-sync" : "Connect inventory"}
-            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => router.push("/account-workspace#marketplace-setup")}
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:bg-slate-50 hover:text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-100"
+          >
+            {inventoryConnected ? <RefreshCw size={16} /> : <LinkIcon size={16} />}
+            {inventoryConnected ? "Re-sync" : "Connect inventory"}
+          </button>
         </StatusStrip>
           {inventoryDependentGoal && !inventoryConnected && (
             <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">

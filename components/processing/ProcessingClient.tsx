@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle2, CircleDashed, DatabaseZap, Radar, ShieldAlert } from "lucide-react";
+import { ArrowLeft, DatabaseZap, Radar } from "lucide-react";
+import { Badge } from "@/components/ui/Badge";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
@@ -650,7 +651,8 @@ export function ProcessingClient() {
         .sort((a, b) => (a.executionOrder ?? 99) - (b.executionOrder ?? 99))
         .map((row) => VisibleAssistants.find((assistant) => assistant.id === row.agentType))
         .filter((assistant): assistant is (typeof VisibleAssistants)[number] => Boolean(assistant))
-    : VisibleAssistants;
+        .filter((assistant) => !["orchestrator", "ami", "coordinator"].includes(assistant.id))
+    : VisibleAssistants.filter((assistant) => !["orchestrator", "ami", "coordinator"].includes(assistant.id));
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
@@ -727,36 +729,45 @@ export function ProcessingClient() {
             const state = assistantStates[assistant.id];
             const statusRow = latestResult?.agentStatus?.find((row) => row.agentType === assistant.id);
 
+            const stateLabel = state.charAt(0).toUpperCase() + state.slice(1);
+            const badgeTone =
+              state === "pending"
+                ? "neutral"
+                : state === "running"
+                ? "teal"
+                : state === "completed"
+                ? "green"
+                : state === "warning"
+                ? "amber"
+                : state === "failed"
+                ? "red"
+                : "neutral";
+
             return (
-              <div key={assistant.id} className="flex flex-col gap-3 border-b border-slate-200 py-4 last:border-b-0 sm:flex-row sm:items-start">
-                <div className="flex min-w-0 flex-1 items-start gap-3">
-                  <span className="mt-0.5">
-                    {state === "completed" ? (
-                      <CheckCircle2 className="text-emerald-600" size={20} />
-                    ) : state === "warning" || state === "failed" ? (
-                      <ShieldAlert className="text-amber-600" size={20} />
-                    ) : (
-                      <CircleDashed className="text-teal-700" size={20} />
-                    )}
-                  </span>
-                  <div>
-                    <p className="font-semibold text-slate-950">{assistant.name}</p>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">{assistant.role}</p>
-                    {statusRow?.goalIntent && <p className="mt-2 text-sm leading-6 text-slate-700">{statusRow.goalIntent}</p>}
-                    <p className="mt-2 text-sm leading-6 text-slate-700">{activity[assistant.id]}</p>
+              <div key={assistant.id} className="flex flex-col gap-3 border-b border-[var(--border-subtle)] py-4 last:border-b-0 sm:flex-row sm:items-start">
+                <div className="flex min-w-0 flex-1 gap-3">
+                  <div className="w-3 shrink-0 flex mt-[6px] items-start">
+                    <StatusDot tone={dotTone(state)} />
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="font-semibold text-[var(--text)]">{assistant.name}</p>
+                    <p className="mt-1 text-sm text-[var(--text-secondary)]">{assistant.role}</p>
+
+                    {state !== "pending" && activity[assistant.id] ? (
+                      <p className="mt-2 text-sm text-[var(--text-secondary)]">{activity[assistant.id]}</p>
+                    ) : null}
+
                     {(statusRow?.fallbackSignals?.length || statusRow?.missingSignals?.length) ? (
-                      <p className="mt-2 text-xs font-semibold uppercase text-amber-700">
+                      <p className="mt-1 text-xs text-[var(--text-tertiary)]">
                         {[...(statusRow.fallbackSignals ?? []), ...(statusRow.missingSignals ?? [])].join(", ")}
                       </p>
                     ) : null}
                   </div>
                 </div>
-                <div className="flex min-w-48 flex-wrap items-center gap-3 sm:justify-end">
-                  <span className="inline-flex items-center gap-2 text-sm font-semibold capitalize text-slate-700">
-                    <StatusDot tone={dotTone(state)} />
-                    {state}
-                  </span>
-                  <span className="text-xs font-semibold uppercase text-slate-500">{assistantSourceType(assistant.id)}</span>
+
+                <div className="flex min-w-48 flex-wrap items-center gap-3 sm:justify-end self-start">
+                  <Badge tone={badgeTone as any}>{stateLabel}</Badge>
                 </div>
               </div>
             );
