@@ -14,6 +14,11 @@ import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives"
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
 import { resolveSourceState, sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
+import {
+  deriveSupplierSourceState,
+  SUPPLIER_SOURCE_EMPTY_COPY,
+  type SupplierSourceStatus
+} from "@/lib/analysis/supplier-source-state";
 import { amiDiagLog, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
 import type { AnalysisResult, EvidenceLink, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
@@ -147,7 +152,7 @@ type DrawerDetail = {
   whyItMatters?: string;
   expectedImpact?: string;
   suppliers: SupplierOption[];
-  supplierNotAttempted: boolean;
+  supplierSourceStatus: SupplierSourceStatus;
   evidence?: EvidencePackage;
   evidenceLinks: EvidenceLink[];
   sourceUrlUnavailableReason: string;
@@ -1469,7 +1474,7 @@ function resolveDrawerDetail(
   const defaultEvidence = analysis.evidencePackages[0];
   const defaultLinks = collectEvidenceLinks(selected, defaultEvidence, analysis);
 
-  const supplierNotAttempted = analysis.supplierOptions.length === 0;
+  const supplierSourceStatus = analysis.supplierSourceStatus ?? deriveSupplierSourceState(analysis).status;
 
   const base: DrawerDetail = {
     rowId: row.id,
@@ -1482,7 +1487,7 @@ function resolveDrawerDetail(
     confidence: row.confidence,
     risk: row.risk,
     suppliers,
-    supplierNotAttempted,
+    supplierSourceStatus,
     evidence: defaultEvidence,
     evidenceLinks: defaultLinks,
     sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, defaultEvidence, selected)
@@ -2322,6 +2327,11 @@ function ActiveTabContent({
     [analysis, selected]
   );
 
+  // Explicit supplier-native source status. Prefer the authoritative status the
+  // backend now persists; fall back to client derivation for older runs that
+  // predate the field. Never inferred from `supplierOptions.length === 0`.
+  const supplierSourceStatus = analysis.supplierSourceStatus ?? deriveSupplierSourceState(analysis).status;
+
   // Per-supplier count of product candidate rows matched via evidence linking.
   // Derived from productRows x suppliers — no external data needed.
   const supplierCatalogMatchCounts = useMemo<Record<string, number>>(() => {
@@ -2453,7 +2463,9 @@ function ActiveTabContent({
             />
             <p className="text-sm text-slate-600">{formatSupplierSelectedCount(selectedSupplierIds.size)}</p>
           </div>
-          <p className="mb-4 text-xs text-[var(--text-tertiary)]">{suppliers.length} suppliers found · ranked by match confidence</p>
+          {suppliers.length > 0 && (
+            <p className="mb-4 text-xs text-[var(--text-tertiary)]">{suppliers.length} suppliers found · ranked by match confidence</p>
+          )}
           {selectedProductIds.size > 0 ? (
             <p className="mt-3 text-sm text-slate-600">
               Supplier coverage is currently scoped to selected product candidates.
@@ -2480,9 +2492,7 @@ function ActiveTabContent({
             />
           ) : (
             <p className="mt-4 text-sm text-slate-600">
-              {analysis.supplierOptions.length === 0
-                ? "Supplier-native source not attempted. Supplier comparison requires supplier catalog data."
-                : "Supplier options connected to this analysis will appear here when available."}
+              {SUPPLIER_SOURCE_EMPTY_COPY[supplierSourceStatus]}
             </p>
           )}
         </div>
@@ -2943,12 +2953,10 @@ function ItemDetailDrawer({
               <p className="text-sm text-slate-600">Supplier options connected to this analysis</p>
               {detail.suppliers.length > 0 ? (
                 <DrawerSupplierTable suppliers={detail.suppliers} />
-              ) : detail.supplierNotAttempted ? (
-                <p className="mt-3 text-sm text-slate-600">
-                  Supplier-native source not attempted. Supplier cost, delivery, and availability require validation.
-                </p>
               ) : (
-                <p className="mt-3 text-sm text-slate-600">No supplier detail is available for this item yet.</p>
+                <p className="mt-3 text-sm text-slate-600">
+                  {SUPPLIER_SOURCE_EMPTY_COPY[detail.supplierSourceStatus]}
+                </p>
               )}
             </div>
           </details>

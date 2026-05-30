@@ -42,6 +42,7 @@ import {
   sourceModeLabel
 } from "@/lib/analysis/source-trace";
 import { writeRunArtifacts } from "@/lib/analysis/run-artifacts";
+import { deriveSupplierSourceState, supplierMissingSignals, supplierSourceReason } from "@/lib/analysis/supplier-source-state";
 import { collectBrightDataEvidence } from "@/lib/data-providers/brightdata/client";
 import type { BrightDataCollectionResult } from "@/lib/data-providers/brightdata/types";
 import { buildAgentStatus, buildGoalWorkflow, buildPendingAgentStatus, goalIntentFor, runAmiAgents, shouldRunSupplier } from "@/lib/agents/orchestrator";
@@ -787,6 +788,22 @@ function fallbackVerdict(analysisRunId: string, context: MarketContextPayload, p
   };
 }
 
+// Supplier-native datasets the pipeline knows how to plan, mapped to the env var
+// that holds each dataset id. `planned` reflects which are configured in this
+// environment. Reading env presence is dry/local-safe — it triggers no collection.
+const SUPPLIER_NATIVE_DATASET_ENV: ReadonlyArray<{ key: string; envs: string[] }> = [
+  { key: "alibaba", envs: ["BRIGHT_DATA_ALIBABA_PRODUCTS_DATASET_ID"] },
+  { key: "aliexpress", envs: ["BRIGHT_DATA_ALIEXPRESS_PRODUCTS_DATASET_ID"] },
+  // eBay accepts the current name plus the legacy alias (see brightdata/client.ts).
+  { key: "ebay", envs: ["BRIGHT_DATA_EBAY_KEYWORD_DATASET_ID", "BRIGHT_DATA_EBAY_DATASET_ID"] }
+];
+
+function plannedSupplierNativeSources(): string[] {
+  return SUPPLIER_NATIVE_DATASET_ENV
+    .filter(({ envs }) => envs.some((env) => Boolean(process.env[env]?.trim())))
+    .map(({ key }) => key);
+}
+
 function buildSupplierOptions(context: MarketContextPayload, products: NormalizedProduct[]): SupplierOption[] {
   const seen = new Set<string>();
 
@@ -1383,6 +1400,15 @@ export async function createAnalysisRunToMetrics(
     inventoryContext.warningMessage
   ].filter((warning): warning is string => Boolean(warning));
 
+  // Authoritative supplier-native source state. Derived from the sources actually
+  // attempted (rawSourceSummary / dataQualitySummary) + supplierOptions — never
+  // from supplierOptions.length. No external calls; no supplier cost is invented.
+  const supplierOptions = buildSupplierOptions(context, collection.products);
+  const supplierSourcesPlanned = plannedSupplierNativeSources();
+  const supplierState = deriveSupplierSourceState({ supplierOptions, dataQualitySummary, rawSourceSummary });
+  const supplierMissing = supplierMissingSignals({ supplierOptions });
+  const supplierReason = supplierSourceReason(supplierState);
+
   const result = AnalysisResultSchema.parse({
     analysisRunId,
     workspaceId,
@@ -1437,7 +1463,12 @@ export async function createAnalysisRunToMetrics(
     opportunities: [executiveRecommendation, secondary],
     assistantFindings: [],
     evidencePackages,
-    supplierOptions: buildSupplierOptions(context, collection.products),
+    supplierOptions,
+    supplierSourceStatus: supplierState.status,
+    supplierSourcesPlanned,
+    supplierSourcesAttempted: supplierState.attempted,
+    supplierMissingSignals: supplierMissing,
+    supplierSourceReason: supplierReason,
     warnings,
     demoMode: analysisRun.mode === "demo"
   });
