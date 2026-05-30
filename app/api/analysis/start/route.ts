@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { completeAnalysisRun, createAnalysisRunToMetrics, INVENTORY_CONTEXT_UNAVAILABLE_WARNING } from "@/lib/ami/analysis";
 import { amiDiagLog, briefingDiagFields, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
 import { MarketContextPayloadSchema, type AnalysisResult } from "@/lib/schemas/ami";
-import { findRecentAnalysisByBriefingFingerprint, getInventorySourceState, isUsableInventorySource, saveAnalysisResult } from "@/lib/services/ami-store";
+import { findRecentAnalysisByBriefingFingerprint, getAnalysisResult, getInventorySourceState, isUsableInventorySource, saveAnalysisResult } from "@/lib/services/ami-store";
 import { jsonError, requireSession } from "@/lib/services/http";
 
 const inventoryRequiredGoals = ["stock_optimization", "revenue_stock_opportunities"];
@@ -54,52 +54,187 @@ function analysisJson(result: AnalysisResult, requestId: string, reused = false)
   return json;
 }
 
+// Maximum wall time for the entire agent-completion phase.
+// Vercel functions using `after()` can run for up to 60 s on Pro plans.
+// We budget 55 s to guarantee we write a terminal status before the function
+// is forcibly terminated.
+const AGENT_COMPLETION_TIMEOUT_MS = 55_000;
+
+// Terminal analysis run statuses — any of these means the run is already done.
+const TERMINAL_STATUSES = new Set<AnalysisResult["status"]>(["completed", "completed_with_fallback", "failed"]);
+
 function continueAgentCompletion(metricsReady: AnalysisResult) {
   if (metricsReady.status === "failed") {
     return;
   }
+
+  amiDiagLog("agent_completion_scheduled", {
+    analysisRunId: metricsReady.analysisRunId,
+    runStatus: metricsReady.status
+  });
 
   // `after` keeps the Vercel serverless function alive until this callback
   // resolves, even after the HTTP response has been sent. Without it, Vercel
   // terminates the execution context at response time, leaving the run stuck
   // at "metrics_ready" and causing infinite frontend polling.
   after(async () => {
-    try {
-      await saveAnalysisResult({
-        ...metricsReady,
-        status: "agents_running",
-        agentStatus: metricsReady.agentStatus.map((entry) => ({
-          ...entry,
-          status:
-            entry.status === "skipped"
-              ? "skipped"
-              : entry.agentType === "trend" ||
-                  entry.agentType === "competitor" ||
-                  entry.agentType === "supplier" ||
-                  entry.agentType === "inventory"
-                ? "running"
-                : "pending",
-          latestActivity:
-            entry.status === "skipped"
-              ? entry.latestActivity
-              : entry.agentType === "trend" ||
-                    entry.agentType === "competitor" ||
-                    entry.agentType === "supplier" ||
-                    entry.agentType === "inventory"
-                ? "Running deterministic specialist analysis on compact KPIs."
-                : entry.latestActivity
-        }))
+    amiDiagLog("agent_completion_started", {
+      analysisRunId: metricsReady.analysisRunId,
+      runStatus: metricsReady.status
+    });
+
+    // safeFail always writes a terminal "failed" status, swallowing any
+    // secondary save error so it can never itself cause an unhandled rejection.
+    const safeFail = async (reason: string) => {
+      amiDiagLog("agent_completion_status_set_failed", {
+        analysisRunId: metricsReady.analysisRunId,
+        reason
       });
-      const completed = await completeAnalysisRun(metricsReady);
-      await saveAnalysisResult(completed);
+      try {
+        await saveAnalysisResult({
+          ...metricsReady,
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          warnings: [...metricsReady.warnings, reason]
+        });
+      } catch (saveErr) {
+        amiDiagLog("agent_completion_failed_save_error", {
+          analysisRunId: metricsReady.analysisRunId,
+          error: saveErr instanceof Error ? saveErr.message : "Unknown error during failed-status save"
+        });
+      }
+    };
+
+    // Outer timeout: if the entire completion phase takes too long, force-fail
+    // rather than leaving the run stuck in "agents_running" indefinitely.
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`Agent completion timed out after ${AGENT_COMPLETION_TIMEOUT_MS}ms`));
+      }, AGENT_COMPLETION_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([
+        (async () => {
+          // Guard: if the run somehow already reached a terminal state in the
+          // DB (e.g., from a previous `after()` attempt), skip re-running agents.
+          const current = await getAnalysisResult(metricsReady.workspaceId, metricsReady.analysisRunId);
+
+          if (current && TERMINAL_STATUSES.has(current.status)) {
+            amiDiagLog("agent_completion_already_terminal", {
+              analysisRunId: metricsReady.analysisRunId,
+              existingStatus: current.status
+            });
+            return;
+          }
+
+          // If recommendations already exist from a prior completion attempt,
+          // mark the run completed without re-running expensive agent logic.
+          if (current && current.recommendations.length > 0 && current.status !== "metrics_ready") {
+            const recycledStatus: AnalysisResult["status"] = current.fallbackUsed ? "completed_with_fallback" : "completed";
+            amiDiagLog("agent_completion_status_set_completed", {
+              analysisRunId: metricsReady.analysisRunId,
+              status: recycledStatus,
+              reason: "recommendations_already_present"
+            });
+            await saveAnalysisResult({ ...current, status: recycledStatus, completedAt: current.completedAt ?? new Date().toISOString() });
+            amiDiagLog("agent_completion_completed", {
+              analysisRunId: metricsReady.analysisRunId,
+              status: recycledStatus,
+              reason: "recommendations_recycled"
+            });
+            return;
+          }
+
+          amiDiagLog("agent_completion_status_set_agents_running", {
+            analysisRunId: metricsReady.analysisRunId
+          });
+          await saveAnalysisResult({
+            ...metricsReady,
+            status: "agents_running",
+            agentStatus: metricsReady.agentStatus.map((entry) => ({
+              ...entry,
+              status:
+                entry.status === "skipped"
+                  ? "skipped"
+                  : entry.agentType === "trend" ||
+                      entry.agentType === "competitor" ||
+                      entry.agentType === "supplier" ||
+                      entry.agentType === "inventory"
+                    ? "running"
+                    : "pending",
+              latestActivity:
+                entry.status === "skipped"
+                  ? entry.latestActivity
+                  : entry.agentType === "trend" ||
+                        entry.agentType === "competitor" ||
+                        entry.agentType === "supplier" ||
+                        entry.agentType === "inventory"
+                    ? "Running deterministic specialist analysis on compact KPIs."
+                    : entry.latestActivity
+            }))
+          });
+
+          amiDiagLog("agent_completion_step_started", {
+            analysisRunId: metricsReady.analysisRunId,
+            step: "complete_analysis_run"
+          });
+
+          const completed = await completeAnalysisRun(metricsReady);
+
+          amiDiagLog("agent_completion_step_completed", {
+            analysisRunId: metricsReady.analysisRunId,
+            step: "complete_analysis_run",
+            status: completed.status
+          });
+
+          amiDiagLog("agent_completion_status_set_completed", {
+            analysisRunId: metricsReady.analysisRunId,
+            status: completed.status
+          });
+          await saveAnalysisResult(completed);
+          amiDiagLog("agent_completion_completed", {
+            analysisRunId: metricsReady.analysisRunId,
+            status: completed.status
+          });
+        })(),
+        timeoutPromise
+      ]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "AMI analysis failed during AI synthesis.";
-      await saveAnalysisResult({
-        ...metricsReady,
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        warnings: [...metricsReady.warnings, message]
+      amiDiagLog("agent_completion_failed", {
+        analysisRunId: metricsReady.analysisRunId,
+        error: message
       });
+
+      // Check if existing recommendations can be salvaged into a fallback completion.
+      let salvaged = false;
+      try {
+        const current = await getAnalysisResult(metricsReady.workspaceId, metricsReady.analysisRunId);
+        if (current && current.recommendations.length > 0 && !TERMINAL_STATUSES.has(current.status)) {
+          amiDiagLog("agent_completion_status_set_completed", {
+            analysisRunId: metricsReady.analysisRunId,
+            status: "completed_with_fallback",
+            reason: "salvaged_after_error"
+          });
+          await saveAnalysisResult({ ...current, status: "completed_with_fallback", completedAt: new Date().toISOString() });
+          amiDiagLog("agent_completion_completed", {
+            analysisRunId: metricsReady.analysisRunId,
+            status: "completed_with_fallback",
+            reason: "salvaged_after_error"
+          });
+          salvaged = true;
+        }
+      } catch {
+        // Salvage attempt failed; fall through to safeFail.
+      }
+
+      if (!salvaged) {
+        await safeFail(message);
+      }
+    } finally {
+      clearTimeout(timeoutHandle);
     }
   });
 }

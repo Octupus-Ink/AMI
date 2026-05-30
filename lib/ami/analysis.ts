@@ -1504,8 +1504,28 @@ export async function completeAnalysisRun(metricsRun: AnalysisResult): Promise<A
     coordinatorType: "ami_orchestrator"
   });
 
-  const agentResult = await runAmiAgents(agentContext);
+  amiDiagLog("ai_completion_started", {
+    analysisRunId: metricsRun.analysisRunId,
+    sourceMode: metricsRun.sourceMode,
+    demoMode: metricsRun.demoMode
+  });
+
+  let agentResult: Awaited<ReturnType<typeof runAmiAgents>>;
+  try {
+    agentResult = await runAmiAgents(agentContext);
+  } catch (agentErr) {
+    amiDiagLog("ai_completion_failed", {
+      analysisRunId: metricsRun.analysisRunId,
+      error: agentErr instanceof Error ? agentErr.message : "Unknown error in runAmiAgents"
+    });
+    throw agentErr;
+  }
   const completedAt = new Date().toISOString();
+  amiDiagLog("ai_completion_completed", {
+    analysisRunId: metricsRun.analysisRunId,
+    usedFallback: agentResult.usedFallback,
+    warningCount: agentResult.warnings.length
+  });
   const sourceMode = metricsRun.sourceMode;
   const outputs = agentResult.outputs;
   const finalVerdict = agentResult.finalVerdict;
