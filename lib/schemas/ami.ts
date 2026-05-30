@@ -395,17 +395,20 @@ export const EvidencePackageSchema = z.object({
 export const SupplierOptionSchema = z.object({
   supplierName: z.string().min(2),
   source: z.string().min(2),
+  externalId: z.string().optional(),
+  evidenceRefIds: z.array(z.string()).default([]),
   sourceUrl: z.string().url().optional(),
   productUrl: z.string().url().optional(),
   supplierUrl: z.string().url().optional(),
   rawSourceSnapshotId: z.string().optional(),
   lastSeenAt: z.string().optional(),
-  estimatedUnitCost: z.number().nonnegative(),
+  estimatedUnitCost: z.number().nonnegative().nullable(),
   estimatedDeliveryTime: z.string().min(2),
   availability: z.string().min(2),
   ratingQualityProxy: z.string().min(2),
   matchConfidence: ConfidenceLevelSchema,
-  risk: RiskLevelSchema
+  risk: RiskLevelSchema,
+  isFallback: z.boolean().default(false)
 });
 
 export const NormalizedProductSchema = z.object({

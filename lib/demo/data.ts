@@ -29,7 +29,7 @@ export const demoMarketContext: MarketContextPayload = {
   productName: "Insulated stainless steel tumbler",
   category: "Drinkware",
   targetMarketplace: "Amazon",
-  supplierSource: "Verified supplier catalog",
+  supplierSource: "Supplier validation required",
   businessGoal: "discover_new_products",
   region: "United States",
   currency: "USD",
@@ -77,8 +77,8 @@ export const demoAssistantUsage: AssistantUsage[] = [
     creditsUsed: 63,
     estimatedUsageCost: 6.3,
     lastRun: "2026-05-26T18:10:00.000Z",
-    latestContribution: "Found viable supplier options with estimated unit cost and delivery windows.",
-    dataSourcesUsed: ["Supplier catalog demo snapshot", "Bright Data marketplace source footprint"],
+    latestContribution: "Flagged supplier pricing and delivery terms for validation before sourcing.",
+    dataSourcesUsed: ["Supplier validation demo snapshot", "Bright Data marketplace source footprint"],
     alertState: "normal"
   },
   {

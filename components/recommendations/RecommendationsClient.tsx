@@ -197,8 +197,20 @@ function formatMargin(estimatedMargin: number | undefined) {
   return `Est. margin ${estimatedMargin.toFixed(1)}%`;
 }
 
+function isFiniteMoneyValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function formatSupplierCost(value: number | null | undefined, currency?: string | undefined) {
+  if (!isFiniteMoneyValue(value)) {
+    return "Unknown";
+  }
+
+  return currency ? `${currency} ${value.toFixed(2)}` : `$${value.toFixed(2)}`;
+}
+
 function formatNullableMoney(value: number | null | undefined) {
-  return value === null || value === undefined ? "Unknown" : `$${value.toFixed(2)}`;
+  return formatSupplierCost(value);
 }
 
 function escapeHtml(value: string | undefined) {
@@ -257,6 +269,75 @@ function buildSupplierRangeFromValues(values: (number | undefined | null)[]) {
   return { min, max };
 }
 
+function getEvidenceExternalId(evidence: EvidencePackage | undefined) {
+  const extracted = evidence?.extractedFields as Record<string, unknown> | undefined;
+  const value = extracted?.external_id ?? extracted?.externalId ?? extracted?.asin ?? extracted?.item_id;
+
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+
+  return undefined;
+}
+
+function candidateEvidenceIds(
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  evidence: EvidencePackage | undefined
+) {
+  return new Set(
+    [
+      opportunity?.evidencePackageId,
+      evidence?.evidencePackageId
+    ].filter((value): value is string => Boolean(value))
+  );
+}
+
+function supplierMatchesCandidate(
+  supplier: SupplierOption,
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  evidence: EvidencePackage | undefined
+) {
+  const evidenceIds = candidateEvidenceIds(opportunity, evidence);
+
+  if (supplier.evidenceRefIds?.some((id) => evidenceIds.has(id))) {
+    return true;
+  }
+
+  const externalId = getEvidenceExternalId(evidence);
+
+  if (externalId && supplier.externalId && supplier.externalId === externalId) {
+    return true;
+  }
+
+  // Last-resort linkage only: one raw snapshot can contain several products.
+  const snapshot = evidence?.rawSourceSnapshotId ?? evidence?.rawRef;
+  return Boolean(snapshot && supplier.rawSourceSnapshotId && supplier.rawSourceSnapshotId === snapshot);
+}
+
+function candidateDedupeKey(
+  row: PreviewRowData,
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  evidence: EvidencePackage | undefined
+) {
+  const record = (opportunity ?? {}) as Record<string, unknown>;
+
+  for (const field of ["productCandidateId", "candidateId", "productId", "normalizedProductId", "productMatchId"]) {
+    const value = record[field];
+
+    if ((typeof value === "string" && value.trim()) || typeof value === "number") {
+      return `${field}:${String(value)}`;
+    }
+  }
+
+  const externalId = getEvidenceExternalId(evidence);
+  if (externalId) return `externalId:${externalId}`;
+  if (evidence?.evidencePackageId) return `evidencePackageId:${evidence.evidencePackageId}`;
+
+  const snapshot = evidence?.rawSourceSnapshotId ?? evidence?.rawRef;
+  if (snapshot) return `titleSnapshot:${row.title}::${snapshot}`;
+
+  return `rowId:${row.id}`;
+}
+
 function getProductCandidateCommercialSnapshot(
   opportunity: AnalysisResult["opportunities"][number] | undefined,
   analysis: AnalysisResult,
@@ -267,54 +348,56 @@ function getProductCandidateCommercialSnapshot(
     : analysis.evidencePackages[0];
 
   const currency = analysis.marketContext.currency ?? "USD";
+  const opportunityRecord = opportunity as Record<string, unknown> | undefined;
+  const evidenceRecord = evidence as Record<string, unknown> | undefined;
 
   // Market price: check a variety of likely fields on opportunity then evidence
   const marketPriceRaw = getFirstPresentValue(
-    opportunity && (opportunity as any).price,
-    opportunity && (opportunity as any).priceUsd,
-    opportunity && (opportunity as any).currentPrice,
-    opportunity && (opportunity as any).currentPriceUsd,
-    opportunity && (opportunity as any).marketPrice,
-    opportunity && (opportunity as any).marketPriceUsd,
-    opportunity && (opportunity as any).estimatedPrice,
-    opportunity && (opportunity as any).estimatedPriceUsd,
-    evidence && (evidence as EvidencePackage).price,
-    evidence && (evidence as EvidencePackage).currentPrice,
-    evidence && ((evidence as EvidencePackage).price ?? (evidence as EvidencePackage).currentPrice)
+    opportunityRecord?.price,
+    opportunityRecord?.priceUsd,
+    opportunityRecord?.currentPrice,
+    opportunityRecord?.currentPriceUsd,
+    opportunityRecord?.marketPrice,
+    opportunityRecord?.marketPriceUsd,
+    opportunityRecord?.estimatedPrice,
+    opportunityRecord?.estimatedPriceUsd,
+    evidence?.price,
+    evidence?.currentPrice
   );
 
   const marketPrice = formatMoneyLike(marketPriceRaw, currency);
 
-  // Supplier costs: try evidence.supplierPrice, then match suppliers by rawSourceSnapshotId to gather unit costs
+  // Supplier costs: try evidence.supplierPrice, then match suppliers by stable product evidence ids.
   const supplierPricesFromEvidence = [] as (number | undefined)[];
 
-  if (evidence && (evidence as EvidencePackage).supplierPrice !== undefined) {
+  if (evidence && isFiniteMoneyValue((evidence as EvidencePackage).supplierPrice)) {
     supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
   }
 
   let supplierOfferCount = 0;
   const supplierCandidates: number[] = [];
+  let matchedSuppliers: SupplierOption[] = [];
 
   if (suppliers && evidence) {
-    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && evidence.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+    matchedSuppliers = suppliers.filter((supplier) => supplierMatchesCandidate(supplier, opportunity, evidence));
 
-    if (matches.length > 0) {
-      supplierOfferCount = matches.length;
-      for (const s of matches) {
-        if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
-          supplierCandidates.push((s as any).estimatedUnitCost);
+    if (matchedSuppliers.length > 0) {
+      supplierOfferCount = matchedSuppliers.length;
+      for (const s of matchedSuppliers) {
+        if (isFiniteMoneyValue(s.estimatedUnitCost)) {
+          supplierCandidates.push(s.estimatedUnitCost);
         }
       }
     }
   }
 
-  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const allSupplierNums = [...supplierPricesFromEvidence, ...supplierCandidates];
   const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
 
   // Delivery estimate: prefer evidence->delivery note, otherwise supplier estimatedDeliveryTime if uniquely matched
   const deliveryEstimate = getFirstPresentValue(
-    evidence && (evidence as any).estimatedDeliveryTime,
-    suppliers && suppliers.length === 1 && (suppliers[0].estimatedDeliveryTime as any)
+    evidenceRecord?.estimatedDeliveryTime,
+    matchedSuppliers.length === 1 ? matchedSuppliers[0].estimatedDeliveryTime : undefined
   );
 
   const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
@@ -355,27 +438,27 @@ function getCommercialSnapshotFromEvidence(evidence: EvidencePackage | undefined
   const marketPrice = formatMoneyLike(marketPriceRaw, currencyUsed);
 
   const supplierPricesFromEvidence = [] as (number | undefined)[];
-  if ((evidence as EvidencePackage).supplierPrice !== undefined) {
+  if (isFiniteMoneyValue((evidence as EvidencePackage).supplierPrice)) {
     supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
   }
 
   let supplierOfferCount = 0;
   const supplierCandidates: number[] = [];
 
-  if (suppliers && evidence && evidence.rawSourceSnapshotId) {
-    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+  if (suppliers && evidence) {
+    const matches = suppliers.filter((supplier) => supplierMatchesCandidate(supplier, undefined, evidence));
     supplierOfferCount = matches.length;
     for (const s of matches) {
-      if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
-        supplierCandidates.push((s as any).estimatedUnitCost);
+      if (isFiniteMoneyValue(s.estimatedUnitCost)) {
+        supplierCandidates.push(s.estimatedUnitCost);
       }
     }
   }
 
-  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const allSupplierNums = [...supplierPricesFromEvidence, ...supplierCandidates];
   const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
 
-  const deliveryEstimate = getFirstPresentValue((evidence as any).estimatedDeliveryTime);
+  const deliveryEstimate = getFirstPresentValue((evidence as Record<string, unknown>).estimatedDeliveryTime);
 
   const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
   const hasSupplierCost = Boolean(supplierCostMin !== undefined || supplierCostMax !== undefined);
@@ -395,11 +478,7 @@ function getCommercialSnapshotFromEvidence(evidence: EvidencePackage | undefined
 }
 
 function formatCurrency(value: unknown, currency?: string | undefined) {
-  if (typeof value === "number") {
-    return `${currency ?? "USD"} ${value.toFixed(2)}`;
-  }
-
-  return undefined;
+  return isFiniteMoneyValue(value) ? formatSupplierCost(value, currency ?? "USD") : "Unknown";
 }
 
 function formatConfidence(value: unknown) {
@@ -1361,8 +1440,11 @@ function resolveDrawerDetail(
       : defaultEvidence;
     const evidenceLinks = collectEvidenceLinks(opportunity, evidence, analysis);
 
+    const scopedSuppliers = suppliers.filter((supplier) => supplierMatchesCandidate(supplier, opportunity, evidence));
+
     return {
       ...base,
+      suppliers: scopedSuppliers,
       title: productName,
       opportunityScore: opportunity?.opportunityScore,
       demand: opportunity?.demandSignal,
@@ -1516,11 +1598,11 @@ function formatMatchQualityLabel(value: string) {
 }
 
 function formatCandidateUnitCost(evidence: EvidencePackage | undefined, supplier: SupplierOption) {
-  if (evidence?.supplierPrice !== undefined && evidence.supplierPrice !== null) {
-    return `$${evidence.supplierPrice.toFixed(2)}`;
+  if (isFiniteMoneyValue(evidence?.supplierPrice)) {
+    return formatSupplierCost(evidence.supplierPrice);
   }
 
-  return `$${supplier.estimatedUnitCost.toFixed(2)}`;
+  return formatSupplierCost(supplier.estimatedUnitCost);
 }
 
 function resolveCandidateMatchQuality(
@@ -1547,20 +1629,34 @@ function getDrawerCandidateProductRows(
   const visibleRows =
     selectedProductIds.size > 0 ? productRows.filter((row) => selectedProductIds.has(row.id)) : productRows;
 
-  return visibleRows.map((row) => {
-    const recommendationId = row.id.replace(/^product-/, "");
-    const opportunity = analysis.opportunities.find((item) => item.recommendationId === recommendationId);
-    const evidence = opportunity
-      ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
-      : undefined;
+  const seen = new Set<string>();
 
-    return {
-      productName: row.title,
-      unitCost: formatCandidateUnitCost(evidence, supplier),
-      delivery: formatDeliveryBatch(supplier.estimatedDeliveryTime),
-      matchQuality: resolveCandidateMatchQuality(opportunity, evidence)
-    };
-  });
+  return visibleRows
+    .map((row) => {
+      const recommendationId = row.id.replace(/^product-/, "");
+      const opportunity = analysis.opportunities.find((item) => item.recommendationId === recommendationId);
+      const evidence = opportunity
+        ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+        : undefined;
+
+      return {
+        key: candidateDedupeKey(row, opportunity, evidence),
+        isLinked: supplierMatchesCandidate(supplier, opportunity, evidence),
+        item: {
+          productName: row.title,
+          unitCost: formatCandidateUnitCost(evidence, supplier),
+          delivery: formatDeliveryBatch(supplier.estimatedDeliveryTime),
+          matchQuality: resolveCandidateMatchQuality(opportunity, evidence)
+        } satisfies SupplierCandidateProductRow
+      };
+    })
+    .filter((entry) => entry.isLinked)
+    .filter((entry) => {
+      if (seen.has(entry.key)) return false;
+      seen.add(entry.key);
+      return true;
+    })
+    .map((entry) => entry.item);
 }
 
 function resolveSupplierDeliveryCost(analysis: AnalysisResult, supplier: SupplierOption) {
@@ -1580,7 +1676,7 @@ function resolveSupplierDrawerDetail(
   analysis: AnalysisResult,
   supplierId: string
 ): SupplierDrawerDetail {
-  const evidence = analysis.evidencePackages[0];
+  const evidence = analysis.evidencePackages.find((item) => supplierMatchesCandidate(supplier, undefined, item));
   const evidenceLinks = supplierEvidenceLinks(supplier, analysis, evidence);
 
   return {
@@ -1625,14 +1721,20 @@ function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
 
   return [
     {
-      supplierName: "Verified supplier catalog option",
-      source: analysis.marketContext.supplierSource,
-      estimatedUnitCost: evidence?.supplierPrice ?? 0,
+      // This is a placeholder derived from marketplace evidence / supplier signals,
+      // not a verified supplier store/catalog.
+      supplierName: "Fallback supplier signal",
+      source: `${analysis.marketContext.supplierSource} (fallback/partial)`,
+      ...(getEvidenceExternalId(evidence) ? { externalId: getEvidenceExternalId(evidence) } : {}),
+      evidenceRefIds: evidence ? [evidence.evidencePackageId] : [],
+      ...(evidence?.rawSourceSnapshotId ? { rawSourceSnapshotId: evidence.rawSourceSnapshotId } : {}),
+      estimatedUnitCost: evidence?.supplierPrice ?? null,
       estimatedDeliveryTime: "Validation required",
-      availability: "Supplier validation pending",
-      ratingQualityProxy: "Quality proxy pending",
+      availability: "unknown",
+      ratingQualityProxy: "Unknown rating (not provided)",
       matchConfidence: evidence?.matchQuality ?? "medium",
-      risk: "medium"
+      risk: "medium",
+      isFallback: true
     }
   ];
 }
@@ -2700,7 +2802,7 @@ function ItemDetailDrawer({
                   return (
                     <dl className="mt-2 flex flex-col gap-2">
                       <DrawerField label="Market price" value={snapshot.marketPrice ?? "Not available"} />
-                      <DrawerField label="Supplier cost" value={supplierText ?? (snapshot.supplierOfferCount > 0 ? "Not available" : "Not available")} />
+                      <DrawerField label="Supplier cost" value={supplierText ?? "Unknown"} />
                       {snapshot.supplierOfferCount > 0 && (
                         <DrawerField label="Supplier offers" value={`${snapshot.supplierOfferCount} offer${snapshot.supplierOfferCount === 1 ? "" : "s"}`} />
                       )}
@@ -2830,10 +2932,10 @@ function DrawerSupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
         </thead>
         <tbody>
           {suppliers.map((supplier) => (
-            <tr key={`${supplier.supplierName}-${supplier.source}`}>
+            <tr key={`${supplier.externalId ?? supplier.rawSourceSnapshotId ?? supplier.supplierName}-${supplier.source}`}>
               <td className="border-b border-slate-100 px-2 py-2 font-semibold text-slate-950">{supplier.supplierName}</td>
               <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.source}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">${supplier.estimatedUnitCost.toFixed(2)}</td>
+              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{formatSupplierCost(supplier.estimatedUnitCost)}</td>
               <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.estimatedDeliveryTime}</td>
               <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.availability}</td>
               <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.matchConfidence}</td>
@@ -3030,11 +3132,12 @@ function SupplierDetailDrawer({
           <section className="mt-6 border-t border-slate-100 pt-5">
             <h4 className="text-sm font-semibold text-slate-950">Cost and delivery</h4>
             <dl className="mt-3 flex flex-col gap-2">
-              <DrawerField label="Unit cost" value={`$${supplier.estimatedUnitCost.toFixed(2)}`} />
+              <DrawerField
+                label="Unit cost"
+                value={formatSupplierCost(supplier.estimatedUnitCost)}
+              />
               <DrawerField label="Delivery estimate" value={formatDeliveryBatch(supplier.estimatedDeliveryTime)} />
-              {detail.supplierPrice !== undefined && detail.supplierPrice !== null && (
-                <DrawerField label="Supplier price" value={`$${detail.supplierPrice.toFixed(2)}`} />
-              )}
+              <DrawerField label="Supplier price" value={formatSupplierCost(detail.supplierPrice)} />
             </dl>
           </section>
 
