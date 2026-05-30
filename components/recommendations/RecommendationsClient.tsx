@@ -219,6 +219,181 @@ function formatString(value: unknown, fallback = "Not available") {
   return String(value);
 }
 
+// Return the first non-empty/meaningful value from a list of candidates.
+function getFirstPresentValue(...values: unknown[]) {
+  return values.find((value) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "string") return value.trim().length > 0;
+    return true;
+  });
+}
+
+function formatMoneyLike(value: unknown, currency?: string | undefined) {
+  if (value === null || value === undefined) return undefined;
+
+  // Accept numeric strings too
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+    if (!Number.isFinite(parsed)) return undefined;
+    return `${currency ?? "USD"} ${parsed.toFixed(2)}`;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return undefined;
+    return `${currency ?? "USD"} ${value.toFixed(2)}`;
+  }
+
+  return undefined;
+}
+
+function buildSupplierRangeFromValues(values: (number | undefined | null)[]) {
+  const nums = values.filter((v): v is number => v !== undefined && v !== null && Number.isFinite(v));
+
+  if (nums.length === 0) return { min: undefined as number | undefined, max: undefined as number | undefined };
+
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  return { min, max };
+}
+
+function getProductCandidateCommercialSnapshot(
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  analysis: AnalysisResult,
+  suppliers: SupplierOption[] | undefined
+) {
+  const evidence = opportunity
+    ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+    : analysis.evidencePackages[0];
+
+  const currency = analysis.marketContext.currency ?? "USD";
+
+  // Market price: check a variety of likely fields on opportunity then evidence
+  const marketPriceRaw = getFirstPresentValue(
+    opportunity && (opportunity as any).price,
+    opportunity && (opportunity as any).priceUsd,
+    opportunity && (opportunity as any).currentPrice,
+    opportunity && (opportunity as any).currentPriceUsd,
+    opportunity && (opportunity as any).marketPrice,
+    opportunity && (opportunity as any).marketPriceUsd,
+    opportunity && (opportunity as any).estimatedPrice,
+    opportunity && (opportunity as any).estimatedPriceUsd,
+    evidence && (evidence as EvidencePackage).price,
+    evidence && (evidence as EvidencePackage).currentPrice,
+    evidence && ((evidence as EvidencePackage).price ?? (evidence as EvidencePackage).currentPrice)
+  );
+
+  const marketPrice = formatMoneyLike(marketPriceRaw, currency);
+
+  // Supplier costs: try evidence.supplierPrice, then match suppliers by rawSourceSnapshotId to gather unit costs
+  const supplierPricesFromEvidence = [] as (number | undefined)[];
+
+  if (evidence && (evidence as EvidencePackage).supplierPrice !== undefined) {
+    supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
+  }
+
+  let supplierOfferCount = 0;
+  const supplierCandidates: number[] = [];
+
+  if (suppliers && evidence) {
+    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && evidence.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+
+    if (matches.length > 0) {
+      supplierOfferCount = matches.length;
+      for (const s of matches) {
+        if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
+          supplierCandidates.push((s as any).estimatedUnitCost);
+        }
+      }
+    }
+  }
+
+  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
+
+  // Delivery estimate: prefer evidence->delivery note, otherwise supplier estimatedDeliveryTime if uniquely matched
+  const deliveryEstimate = getFirstPresentValue(
+    evidence && (evidence as any).estimatedDeliveryTime,
+    suppliers && suppliers.length === 1 && (suppliers[0].estimatedDeliveryTime as any)
+  );
+
+  const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
+  const hasSupplierCost = Boolean(supplierCostMin !== undefined || supplierCostMax !== undefined);
+  const hasAnyCommercialData = hasMarketPrice || hasSupplierCost || supplierOfferCount > 0 || Boolean(deliveryEstimate);
+
+  return {
+    marketPriceRaw,
+    marketPrice,
+    supplierCostMin,
+    supplierCostMax,
+    supplierOfferCount,
+    deliveryEstimate: typeof deliveryEstimate === "string" ? deliveryEstimate : deliveryEstimate ? String(deliveryEstimate) : undefined,
+    hasMarketPrice,
+    hasSupplierCost,
+    hasAnyCommercialData
+  };
+}
+
+function getCommercialSnapshotFromEvidence(evidence: EvidencePackage | undefined, suppliers: SupplierOption[] | undefined, currency?: string) {
+  const currencyUsed = currency ?? "USD";
+
+  if (!evidence) {
+    return {
+      marketPriceRaw: undefined,
+      marketPrice: undefined,
+      supplierCostMin: undefined,
+      supplierCostMax: undefined,
+      supplierOfferCount: 0,
+      deliveryEstimate: undefined,
+      hasMarketPrice: false,
+      hasSupplierCost: false,
+      hasAnyCommercialData: false
+    };
+  }
+
+  const marketPriceRaw = getFirstPresentValue((evidence as EvidencePackage).price, (evidence as EvidencePackage).currentPrice);
+  const marketPrice = formatMoneyLike(marketPriceRaw, currencyUsed);
+
+  const supplierPricesFromEvidence = [] as (number | undefined)[];
+  if ((evidence as EvidencePackage).supplierPrice !== undefined) {
+    supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
+  }
+
+  let supplierOfferCount = 0;
+  const supplierCandidates: number[] = [];
+
+  if (suppliers && evidence && evidence.rawSourceSnapshotId) {
+    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+    supplierOfferCount = matches.length;
+    for (const s of matches) {
+      if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
+        supplierCandidates.push((s as any).estimatedUnitCost);
+      }
+    }
+  }
+
+  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
+
+  const deliveryEstimate = getFirstPresentValue((evidence as any).estimatedDeliveryTime);
+
+  const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
+  const hasSupplierCost = Boolean(supplierCostMin !== undefined || supplierCostMax !== undefined);
+  const hasAnyCommercialData = hasMarketPrice || hasSupplierCost || supplierOfferCount > 0 || Boolean(deliveryEstimate);
+
+  return {
+    marketPriceRaw,
+    marketPrice,
+    supplierCostMin,
+    supplierCostMax,
+    supplierOfferCount,
+    deliveryEstimate: typeof deliveryEstimate === "string" ? deliveryEstimate : deliveryEstimate ? String(deliveryEstimate) : undefined,
+    hasMarketPrice,
+    hasSupplierCost,
+    hasAnyCommercialData
+  };
+}
+
 function formatCurrency(value: unknown, currency?: string | undefined) {
   if (typeof value === "number") {
     return `${currency ?? "USD"} ${value.toFixed(2)}`;
@@ -970,18 +1145,58 @@ function toggleSelection(setSelectedIds: Dispatch<SetStateAction<Set<string>>>, 
   });
 }
 
-function deriveProductCandidates(analysis: AnalysisResult): PreviewRowData[] {
+function deriveProductCandidates(analysis: AnalysisResult, suppliers?: SupplierOption[]): PreviewRowData[] {
   const productName = analysis.marketContext.productName;
 
-  return analysis.opportunities.map((opportunity) => ({
-    id: `product-${opportunity.recommendationId}`,
-    title: productName,
-    summary: opportunity.primaryReason,
-    risk: opportunity.riskLevel,
-    confidence: opportunity.confidenceLevel,
-    meta: formatMargin(opportunity.estimatedMargin),
-    variant: "product"
-  }));
+  return analysis.opportunities.map((opportunity) => {
+    const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, suppliers);
+    const currency = analysis.marketContext.currency ?? "USD";
+
+    let commercialMeta: string | undefined;
+
+    if (snapshot.hasAnyCommercialData) {
+      const market = snapshot.hasMarketPrice ? snapshot.marketPrice : undefined;
+
+      let supplierText: string | undefined;
+
+      if (snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined) {
+        if (snapshot.supplierCostMin === snapshot.supplierCostMax) {
+          supplierText = formatMoneyLike(snapshot.supplierCostMin, currency);
+        } else {
+          supplierText = `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(
+            snapshot.supplierCostMax,
+            currency
+          )}`;
+        }
+      }
+
+      if (market && supplierText) {
+        commercialMeta = `Market price: ${market} · Supplier cost: ${supplierText}`;
+      } else if (market) {
+        commercialMeta = `Market price: ${market} · Supplier cost unavailable`;
+      } else if (supplierText) {
+        commercialMeta = `Market price unavailable · Supplier cost: ${supplierText}`;
+      } else if (snapshot.supplierOfferCount > 0) {
+        commercialMeta = `Market price unavailable · ${snapshot.supplierOfferCount} supplier offers`;
+      } else if (snapshot.deliveryEstimate) {
+        commercialMeta = `Delivery: ${snapshot.deliveryEstimate}`;
+      }
+    }
+
+    if (!commercialMeta) {
+      commercialMeta = "Pricing unavailable";
+    }
+
+    return {
+      id: `product-${opportunity.recommendationId}`,
+      title: productName,
+      summary: opportunity.primaryReason,
+      risk: opportunity.riskLevel,
+      confidence: opportunity.confidenceLevel,
+      meta: commercialMeta,
+      variant: "product"
+    };
+  });
 }
 
 function isPromoLikeText(text: string) {
@@ -1901,7 +2116,7 @@ function ActiveTabContent({
   const [promoPage, setPromoPage] = useState(0);
   const [inventoryPage, setInventoryPage] = useState(0);
 
-  const productRows = useMemo(() => deriveProductCandidates(analysis), [analysis]);
+  const productRows = useMemo(() => deriveProductCandidates(analysis, suppliers), [analysis, suppliers]);
   const promoRows = useMemo(
     () => derivePromoCandidates(analysis).map((row) => ({ ...row, id: `promo-${row.id}` })),
     [analysis]
@@ -2356,7 +2571,10 @@ function ItemDetailDrawer({
   useDrawerLock(onClose);
 
   const marginLabel =
-    detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
+    // Do not display margin for product candidate drawers (MVP rule)
+    detail.variant === "product"
+      ? undefined
+      : detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
       ? `Est. margin ${detail.estimatedMargin.toFixed(1)}%`
       : undefined;
 
@@ -2421,6 +2639,43 @@ function ItemDetailDrawer({
               <DrawerField label="Selected status" value={isSelected ? "Selected" : "Not selected"} />
             </dl>
           </section>
+
+          {/* Commercial snapshot inserted for product candidates */}
+          {detail.variant === "product" && (
+            <section className="mt-6 border-t border-slate-100 pt-5">
+              <h4 className="text-sm font-semibold text-slate-950">Commercial snapshot</h4>
+              <div className="mt-3">
+                {(() => {
+                  const snapshot = getCommercialSnapshotFromEvidence(detail.evidence, detail.suppliers, detail.evidence?.currency);
+                  const currency = detail.evidence?.currency ?? "USD";
+
+                  if (!snapshot.hasAnyCommercialData) {
+                    return <p className="mt-2 text-sm text-slate-600">Pricing data was not available from the current source records.</p>;
+                  }
+
+                  const supplierText = snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined
+                    ? snapshot.supplierCostMin === snapshot.supplierCostMax
+                      ? formatMoneyLike(snapshot.supplierCostMin, currency)
+                      : `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(snapshot.supplierCostMax, currency)}`
+                    : undefined;
+
+                  return (
+                    <dl className="mt-2 flex flex-col gap-2">
+                      <DrawerField label="Market price" value={snapshot.marketPrice ?? "Not available"} />
+                      <DrawerField label="Supplier cost" value={supplierText ?? (snapshot.supplierOfferCount > 0 ? "Not available" : "Not available")} />
+                      {snapshot.supplierOfferCount > 0 && (
+                        <DrawerField label="Supplier offers" value={`${snapshot.supplierOfferCount} offer${snapshot.supplierOfferCount === 1 ? "" : "s"}`} />
+                      )}
+                      {snapshot.deliveryEstimate && <DrawerField label="Delivery estimate" value={String(snapshot.deliveryEstimate)} />}
+                      {(snapshot.hasSupplierCost || snapshot.supplierOfferCount > 0) && (
+                        <p className="mt-3 text-xs text-slate-600">Supplier cost does not include freight, import fees, taxes, or marketplace fees.</p>
+                      )}
+                    </dl>
+                  );
+                })()}
+              </div>
+            </section>
+          )}
 
           <section className="mt-6 border-t border-slate-100 pt-5">
             <h4 className="text-sm font-semibold text-slate-950">Opportunity score</h4>
