@@ -115,20 +115,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
 function HomeTopNav() {
   return (
-    <header className="h-[72px] border-b border-slate-200 bg-white/88 backdrop-blur">
-      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 min-[1024px]:max-[1365px]:px-8 min-[1366px]:px-0">
+    <header className="sticky top-0 z-50 h-[72px] border-b border-[var(--border-subtle)] bg-white/[0.88] px-4 backdrop-blur-md sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4">
         <BrightDataPill />
 
-        <nav className="flex items-center gap-2 sm:gap-4">
-          <a href="#how-it-works" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
+        <nav className="flex items-center gap-2 sm:gap-3">
+          <a
+            href="#how-it-works"
+            className="hidden rounded-md px-3 py-2 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 sm:inline"
+          >
             How it works?
           </a>
-          <a href="#pricing" className="hidden text-sm font-semibold text-slate-700 transition hover:text-teal-800 sm:inline">
+
+          <a
+            href="#pricing"
+            className="hidden rounded-md px-3 py-2 text-sm font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-muted)] hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30 sm:inline"
+          >
             Pricing
           </a>
+
           <a
             href="#new-workspace"
-            className="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-800 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            className="inline-flex min-h-10 items-center rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm font-semibold text-[var(--text)] shadow-sm transition-colors hover:border-teal-200 hover:bg-[var(--accent-light)] hover:text-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/30"
           >
             Create Workspace
           </a>
