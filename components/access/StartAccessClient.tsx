@@ -125,8 +125,16 @@ export function StartAccessClient() {
   }
 
   return (
-    <main className="flex min-h-[calc(100vh-72px)] items-center px-4 sm:px-6 lg:px-8">
-      <section className="mx-auto flex min-h-[65vh] w-full max-w-7xl flex-col items-start justify-center gap-10 py-10 lg:flex-row lg:gap-16">
+    <main className="ami-home-canvas relative isolate flex min-h-[calc(100vh-72px)] items-center overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
+      >
+        <div className="ami-home-orb ami-home-orb-a" />
+        <div className="ami-home-orb ami-home-orb-b" />
+        <div className="ami-home-orb ami-home-orb-c" />
+      </div>
+      <section className="mx-auto flex min-h-[65vh] w-full max-w-7xl flex-col items-start z-1 justify-center gap-10 py-10 lg:flex-row lg:gap-16">
         <div className="flex min-w-0 flex-1 flex-col justify-center items-flex-start">
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-950 text-base font-bold text-white">
             AMI
@@ -269,6 +277,82 @@ export function StartAccessClient() {
           )}
         </section>
       </section>
+  <style>{`
+    .ami-home-canvas {
+      background:
+        linear-gradient(135deg, #f8fafc 0%, #ffffff 46%, rgba(240, 253, 250, 0.72) 100%);
+    }
+
+    .ami-home-orb {
+      position: absolute;
+      border-radius: 9999px;
+      filter: blur(72px);
+      opacity: 0.48;
+      will-change: transform;
+    }
+
+    .ami-home-orb-a {
+      width: 520px;
+      height: 520px;
+      left: -120px;
+      top: 48px;
+      background: rgba(13, 148, 136, 0.18);
+      animation: ami-home-orb-a 11s ease-in-out infinite;
+    }
+
+    .ami-home-orb-b {
+      width: 560px;
+      height: 560px;
+      right: -160px;
+      top: 80px;
+      background: rgba(37, 99, 235, 0.11);
+      animation: ami-home-orb-b 13s ease-in-out infinite;
+    }
+
+    .ami-home-orb-c {
+      width: 620px;
+      height: 620px;
+      left: 42%;
+      bottom: -260px;
+      background: rgba(20, 184, 166, 0.12);
+      animation: ami-home-orb-c 15s ease-in-out infinite;
+    }
+
+    @keyframes ami-home-orb-a {
+      0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      50% {
+        transform: translate3d(48px, 22px, 0) scale(1.2);
+      }
+    }
+
+    @keyframes ami-home-orb-b {
+      0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      50% {
+        transform: translate3d(-56px, 30px, 0) scale(1.1);
+      }
+    }
+
+    @keyframes ami-home-orb-c {
+      0%, 100% {
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      50% {
+        transform: translate3d(-28px, -44px, 0) scale(1.07);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .ami-home-orb-a,
+      .ami-home-orb-b,
+      .ami-home-orb-c {
+        animation: none;
+      }
+    }
+  `}</style>
     </main>
   );
 }
