@@ -26,8 +26,8 @@ const NormalizedProductSchema = new Schema(
 
     marketSignals: {
       rating: { type: Number, default: null },
-      reviewsCount: { type: Number, default: 0 },
-      boughtPastMonth: { type: Number, default: 0 },
+      reviewsCount: { type: Number, default: null },
+      boughtPastMonth: { type: Number, default: null },
       rankOnPage: { type: Number, default: null },
       sponsored: { type: Boolean, default: false },
       isPrime: { type: Boolean, default: false },

@@ -11,7 +11,7 @@ const RawMarketplaceRecordSchema = new Schema(
     rawData: { type: Schema.Types.Mixed, required: true },
     status: {
       type: String,
-      enum: ["success", "error"],
+      enum: ["success", "partial", "empty", "failed", "error"],
       default: "success",
     },
     errorCode: { type: String, default: "" },

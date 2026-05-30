@@ -124,9 +124,9 @@ export function buildEvidencePackages(
       isFallback,
       scrapedAt,
       productIdentity: primary?.title ?? context.productName,
-      currentPrice: primary?.priceUsd ?? primary?.price ?? 0,
-      supplierPrice: primary?.supplierPrice ?? 0,
-      estimatedMargin: primary?.estimatedMargin ?? 0,
+      currentPrice: primary?.priceUsd ?? primary?.price ?? null,
+      supplierPrice: primary?.supplierPrice ?? null,
+      estimatedMargin: primary?.estimatedMargin ?? null,
       demandIndicators: demandIndicators.length ? demandIndicators : ["No visible source evidence available"],
       socialMomentum: signalLabel(primary?.trendMomentum),
       competitionLevel: competitionLevel(primary?.pricePressure),
@@ -134,8 +134,8 @@ export function buildEvidencePackages(
       matchScore: Math.round((primary?.matchConfidence ?? 0.65) * 100),
       matchedAttributes: ["Product name", "Category", "Marketplace query intent"].filter(Boolean),
       riskInputs: [
-        `Price pressure ${primary?.pricePressure ?? 0}/100`,
-        `Inventory risk ${primary?.inventoryRisk ?? 0}/100`,
+        primary?.pricePressure === undefined ? "Price pressure unknown because price data is incomplete" : `Price pressure ${primary.pricePressure}/100`,
+        primary?.inventoryRisk === undefined ? "Inventory risk unknown" : `Inventory risk ${primary.inventoryRisk}/100`,
         primary?.deliveryCostNote ?? "Supplier delivery cost requires validation"
       ],
       assistantUsed: "competitor"

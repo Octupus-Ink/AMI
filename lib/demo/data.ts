@@ -38,6 +38,17 @@ export const demoMarketContext: MarketContextPayload = {
 
 export const demoAssistantUsage: AssistantUsage[] = [
   {
+    assistantId: "orchestrator",
+    usageCount: 7,
+    creditLimit: 130,
+    creditsUsed: 92,
+    estimatedUsageCost: 9.2,
+    lastRun: "2026-05-26T18:10:00.000Z",
+    latestContribution: "Resolved goal-specific agent outputs into the final AMI recommendation.",
+    dataSourcesUsed: ["Specialist agent outputs", "Compact KPI evidence", "Data quality summary"],
+    alertState: "normal"
+  },
+  {
     assistantId: "trend",
     usageCount: 10,
     creditLimit: 130,
@@ -80,28 +91,6 @@ export const demoAssistantUsage: AssistantUsage[] = [
     latestContribution: "Reviewed stock posture, margin context, and sourcing risk.",
     dataSourcesUsed: ["Workspace inventory context", "Supplier margin snapshot"],
     alertState: "near_limit"
-  },
-  {
-    assistantId: "coordinator",
-    usageCount: 7,
-    creditLimit: 100,
-    creditsUsed: 44,
-    estimatedUsageCost: 4.4,
-    lastRun: "2026-05-26T18:10:00.000Z",
-    latestContribution: "Resolved agent agreements, conflicts, confidence gaps, and decision factors.",
-    dataSourcesUsed: ["Specialist agent outputs", "Compact KPI evidence"],
-    alertState: "normal"
-  },
-  {
-    assistantId: "strategy",
-    usageCount: 7,
-    creditLimit: 100,
-    creditsUsed: 48,
-    estimatedUsageCost: 4.8,
-    lastRun: "2026-05-26T18:10:00.000Z",
-    latestContribution: "Produced final AMI verdict, recommended action, and next step.",
-    dataSourcesUsed: ["Coordinator synthesis", "Final strategy payload"],
-    alertState: "normal"
   }
 ];
 

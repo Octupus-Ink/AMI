@@ -50,6 +50,8 @@ export function writeRunArtifacts(result: AnalysisResult) {
     sourceProvider: result.sourceProvider,
     sourceProducts: result.sourceProducts,
     sourceSummary: result.sourceSummary,
+    rawSourceSummary: result.rawSourceSummary,
+    dataQualitySummary: result.dataQualitySummary,
     sourceCollectionStatus: {
       brightDataProduct: result.sourceCollectionStatus.brightDataProduct,
       providerStatus: result.sourceCollectionStatus.providerStatus,
@@ -94,6 +96,6 @@ export function writeRunArtifacts(result: AnalysisResult) {
     }))
   });
   writeJson(join(dir, "assistant-runs.json"), result.assistantRunTrace);
-  writeJson(join(dir, "coordinator-result.json"), result.coordinatorTrace ?? {});
+  writeJson(join(dir, "orchestrator-result.json"), result.coordinatorTrace ?? result.finalVerdict ?? {});
   writeText(join(dir, "errors.log"), errors.length ? errors : ["No errors recorded."]);
 }

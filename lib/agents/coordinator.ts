@@ -16,7 +16,7 @@ function fallbackCoordinator(context: AgentContext, findings: AgentFinding[], st
   const trend = findings.find((finding) => finding.agentType === "trend");
 
   return CoordinatorSynthesisOutputSchema.parse({
-    agentType: "coordinator",
+    agentType: "orchestrator",
     status,
     summary:
       risky.length > 0
@@ -64,7 +64,7 @@ export async function runCoordinatorAgent(
     })),
     findings,
     requiredJsonShape: {
-      agentType: "coordinator",
+      agentType: "orchestrator",
       status: "completed",
       summary: "One concise business synthesis.",
       agreements: ["Agreement item"],
@@ -80,7 +80,7 @@ export async function runCoordinatorAgent(
   };
   const live = await generateAgentJson(
     CoordinatorSynthesisOutputSchema,
-    "You are AMI's coordinator. Compare specialist agent findings. Return agreements, conflicts, confidence gaps, risk blockers, decision factors, strongest signals, weakest signals, confidence, and riskLevel.",
+    "You are AMI's Orchestrator. Compare specialist agent findings against the selected business goal. Return agreements, conflicts, confidence gaps, risk blockers, decision factors, strongest signals, weakest signals, confidence, and riskLevel.",
     compactPayload
   );
 
@@ -95,6 +95,6 @@ export async function runCoordinatorAgent(
   return {
     output: fallbackCoordinator(context, findings, "fallback"),
     usedFallback: true,
-    warning: live.safeError ?? "AIMLAPI coordinator fallback used."
+    warning: live.safeError ?? "AIMLAPI orchestrator synthesis fallback used."
   };
 }

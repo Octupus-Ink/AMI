@@ -82,7 +82,7 @@ export function safeTraceError(value: unknown) {
 }
 
 export function isSourceFallbackMode(mode: unknown) {
-  return mode === "fallback_snapshot" || mode === "demo_seed" || mode === "demo_fallback" || mode === "demo_snapshot" || mode === "mixed";
+  return mode === "fallback" || mode === "fallback_snapshot" || mode === "demo" || mode === "demo_seed" || mode === "demo_fallback" || mode === "demo_snapshot" || mode === "mixed";
 }
 
 export function sourceModeLabel(mode: unknown) {
@@ -90,11 +90,11 @@ export function sourceModeLabel(mode: unknown) {
     return "Live Bright Data data";
   }
 
-  if (mode === "fallback_snapshot") {
+  if (mode === "fallback" || mode === "fallback_snapshot") {
     return "Fallback snapshot";
   }
 
-  if (mode === "demo_seed") {
+  if (mode === "demo" || mode === "demo_seed") {
     return "Demo seed";
   }
 
@@ -103,7 +103,7 @@ export function sourceModeLabel(mode: unknown) {
   }
 
   if (mode === "mixed") {
-    return "Fallback snapshot";
+    return "Mixed live + fallback";
   }
 
   if (mode === "error" || mode === "not_configured") {

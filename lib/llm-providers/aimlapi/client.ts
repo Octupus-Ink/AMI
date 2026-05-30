@@ -111,11 +111,10 @@ function candidateObjects(parsed: unknown) {
     "response",
     "data",
     "json",
-    "coordinator",
-    "coordinatorSynthesis",
+    "orchestrator",
+    "orchestratorSynthesis",
     "synthesis",
     "verdict",
-    "strategy",
     "finalVerdict"
   ];
   const candidates: unknown[] = [parsed];

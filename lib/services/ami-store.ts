@@ -35,14 +35,19 @@ import {
   EvidencePackageModel,
   InventoryConnection,
   InventorySyncStatus,
+  InventorySnapshot,
   MarketplaceProfile,
   MarketContext,
+  NormalizedProduct,
   Opportunity,
+  CompetitorSnapshot,
   RawSourceSnapshot,
   RecommendationModel,
   SavedReport,
   Session,
   SimulatedPayment,
+  SupplierCandidate,
+  TrendSignal,
   User,
   Workspace,
   WorkspaceCredit
@@ -807,6 +812,9 @@ export async function saveAnalysisResult(result: AnalysisResult) {
             runId: result.analysisRunId,
             sourceMode: result.sourceMode,
             fallbackUsed: result.fallbackUsed,
+            rawSourceSnapshots: result.rawSourceSnapshots,
+            rawSourceSummary: result.rawSourceSummary,
+            dataQualitySummary: result.dataQualitySummary,
             sourceProvider: result.sourceProvider,
             sourceProducts: result.sourceProducts,
             sourceSummary: result.sourceSummary,
@@ -842,17 +850,14 @@ export async function saveAnalysisResult(result: AnalysisResult) {
             dataSourcesUsed: [finding.sourceLabel],
             warning: finding.risk === "high" ? finding.reason : undefined
           }));
-      const coordinatorTraceRecord = result.coordinatorTrace
-        ? {
-            analysisRunId: result.analysisRunId,
-            assistantType: "coordinator",
-            ...result.coordinatorTrace
-          }
-        : undefined;
-
       writes.push(
         AssistantRun.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         EvidencePackageModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        NormalizedProduct.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        InventorySnapshot.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        TrendSignal.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        CompetitorSnapshot.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
+        SupplierCandidate.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         Opportunity.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         RecommendationModel.deleteMany({ workspaceId: result.workspaceId, "data.analysisRunId": result.analysisRunId }) as never,
         ...assistantTraceRecords.map((trace) =>
@@ -861,14 +866,6 @@ export async function saveAnalysisResult(result: AnalysisResult) {
             data: trace
           }) as never
         ),
-        ...(coordinatorTraceRecord
-          ? [
-              AssistantRun.create({
-                workspaceId: result.workspaceId,
-                data: coordinatorTraceRecord
-              }) as never
-            ]
-          : []),
         ...result.evidencePackages.map((evidence) =>
           EvidencePackageModel.create({
             workspaceId: result.workspaceId,
@@ -878,6 +875,58 @@ export async function saveAnalysisResult(result: AnalysisResult) {
             }
           }) as never
         ),
+        ...result.normalizedProducts.map((product) =>
+          NormalizedProduct.create({
+            workspaceId: result.workspaceId,
+            data: {
+              analysisRunId: result.analysisRunId,
+              ...product
+            }
+          }) as never
+        ),
+        InventorySnapshot.create({
+          workspaceId: result.workspaceId,
+          data: {
+            analysisRunId: result.analysisRunId,
+            businessGoal: result.marketContext.businessGoal,
+            metrics: result.preliminaryMetrics?.canonicalMetrics ?? {},
+            inventoryStatus: result.assistantStatus.inventory,
+            createdAt: result.completedAt ?? new Date().toISOString()
+          }
+        }) as never,
+        TrendSignal.create({
+          workspaceId: result.workspaceId,
+          data: {
+            analysisRunId: result.analysisRunId,
+            businessGoal: result.marketContext.businessGoal,
+            metrics: result.preliminaryMetrics?.canonicalMetrics ?? {},
+            sources: result.sourceProducts,
+            dataQuality: result.dataQualitySummary
+          }
+        }) as never,
+        CompetitorSnapshot.create({
+          workspaceId: result.workspaceId,
+          data: {
+            analysisRunId: result.analysisRunId,
+            businessGoal: result.marketContext.businessGoal,
+            metrics: result.preliminaryMetrics?.canonicalMetrics ?? {},
+            products: result.normalizedProducts.map((product) => ({
+              title: product.title,
+              priceUsd: product.priceUsd,
+              pricePressure: product.pricePressure,
+              availability: product.availability
+            }))
+          }
+        }) as never,
+        SupplierCandidate.create({
+          workspaceId: result.workspaceId,
+          data: {
+            analysisRunId: result.analysisRunId,
+            businessGoal: result.marketContext.businessGoal,
+            candidates: result.supplierOptions,
+            dataQuality: result.dataQualitySummary
+          }
+        }) as never,
         ...result.opportunities.map((opportunity) =>
           Opportunity.create({
             workspaceId: result.workspaceId,
@@ -924,12 +973,11 @@ export async function getAnalysisResult(workspaceId: string, analysisRunId: stri
 
 async function updateAssistantUsageAfterRun(workspaceId: string, result: AnalysisResult) {
   const costs: Record<AssistantId, number> = {
+    orchestrator: 11,
     trend: 6,
     competitor: 8,
     supplier: 9,
-    inventory: 7,
-    coordinator: 5,
-    strategy: 6
+    inventory: 7
   };
   const terminalSuccess = result.status === "completed" || result.status === "completed_with_fallback";
   const executedAssistantIds = new Set<AssistantId>();
@@ -953,11 +1001,11 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
   }
 
   if (result.synthesis) {
-    executedAssistantIds.add("coordinator");
+    executedAssistantIds.add("orchestrator");
   }
 
   if (result.finalVerdict) {
-    executedAssistantIds.add("strategy");
+    executedAssistantIds.add("orchestrator");
   }
 
   if (!executedAssistantIds.size) {
@@ -976,12 +1024,7 @@ async function updateAssistantUsageAfterRun(workspaceId: string, result: Analysi
       (item) => item.assistantId === current.assistantId
     );
     const nextCredits = current.creditsUsed + cost;
-    const fallbackContribution =
-      current.assistantId === "coordinator"
-        ? result.synthesis?.summary
-        : current.assistantId === "strategy"
-          ? result.finalVerdict?.finalVerdict
-          : undefined;
+    const fallbackContribution = current.assistantId === "orchestrator" ? result.finalVerdict?.finalVerdict ?? result.synthesis?.summary : undefined;
 
     return {
       ...current,

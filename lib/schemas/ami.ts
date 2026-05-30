@@ -35,6 +35,8 @@ export const NormalizedSourceModeSchema = z.enum(["live", "fallback_snapshot", "
 export const SourceModeSchema = z.enum([
   "pending",
   "live",
+  "demo",
+  "fallback",
   "fallback_snapshot",
   "demo_seed",
   "demo_fallback",
@@ -45,6 +47,10 @@ export const SourceModeSchema = z.enum([
 ]);
 export const SourceProviderSchema = z.enum(["brightdata", "demo", "unknown"]);
 export const SourceProviderStatusSchema = z.enum(["pending", "live_success", "fallback_used", "partial_fallback", "failed"]);
+export const AnalysisRunModeSchema = z.enum(["live", "demo", "fallback"]);
+export const CanonicalSourceModeSchema = z.enum(["live", "demo", "mixed", "fallback"]);
+export const RawSourceStatusSchema = z.enum(["success", "partial", "empty", "failed"]);
+export const DataQualityStatusSchema = z.enum(["success", "partial", "degraded", "failed"]);
 export const SourceProofItemSchema = z.object({
   title: z.string().min(1),
   sourceType: z.enum(["brightdata", "provider", "demo_fallback", "manual", "unknown"]),
@@ -54,7 +60,7 @@ export const SourceProofItemSchema = z.object({
   snippet: z.string().nullable(),
   isFallback: z.boolean()
 });
-const SpecialistAssistantSchema = z.enum(["trend", "competitor", "supplier", "inventory"]);
+const SpecialistAssistantSchema = z.enum(["inventory", "trend", "competitor", "supplier"]);
 export const SourceSummarySchema = z.object({
   provider: SourceProviderSchema,
   productsUsed: z.array(z.string()).default([]),
@@ -75,9 +81,56 @@ export const RawSnapshotMetadataSchema = z.object({
   capturedAt: z.string(),
   mode: NormalizedSourceModeSchema,
   recordCount: z.number().int().nonnegative().optional(),
-  status: z.enum(["success", "failed", "loaded_from_snapshot", "not_saved"]).default("success"),
+  status: z.enum(["success", "partial", "empty", "failed", "loaded_from_snapshot", "not_saved"]).default("success"),
   safeError: z.string().optional()
 });
+export const RawSourceSnapshotRecordSchema = z.object({
+  rawSourceSnapshotId: z.string(),
+  analysisRunId: z.string(),
+  source: z.string(),
+  status: RawSourceStatusSchema,
+  errorCode: z.string().nullable().optional(),
+  errorMessage: z.string().nullable().optional(),
+  input: z.record(z.unknown()).default({}),
+  recordCount: z.number().int().nonnegative(),
+  receivedAt: z.string(),
+  rawPayloadRef: z.string().optional()
+});
+export const RawSourceSummarySchema = z.object({
+  success: z.array(z.string()).default([]),
+  partial: z.array(z.string()).default([]),
+  empty: z.array(z.string()).default([]),
+  failed: z.array(z.string()).default([])
+});
+export const DataQualitySchema = z.object({
+  status: DataQualityStatusSchema,
+  failedSources: z.array(z.string()).default([]),
+  partialSources: z.array(z.string()).default([]),
+  emptySources: z.array(z.string()).default([]),
+  fallbacksUsed: z.array(z.string()).default([]),
+  missingCriticalFields: z.array(z.string()).default([]),
+  confidencePenaltyApplied: z.number().min(0).max(1).default(0),
+  sourceReliability: z.number().min(0).max(1).nullable().default(null),
+  fieldCompleteness: z.number().min(0).max(1).nullable().default(null),
+  sourceFreshness: z.number().min(0).max(1).nullable().default(null),
+  matchQuality: z.number().min(0).max(1).nullable().default(null),
+  agentAgreement: z.number().min(0).max(1).nullable().default(null)
+});
+export const AnalysisRunContractSchema = z.object({
+  analysisRunId: z.string(),
+  workspaceId: z.string(),
+  businessGoal: z.string(),
+  goalIntent: z.string(),
+  inputContext: z.record(z.unknown()).default({}),
+  status: AnalysisStatusSchema,
+  mode: AnalysisRunModeSchema,
+  sourceMode: CanonicalSourceModeSchema,
+  startedAt: z.string(),
+  completedAt: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export const BusinessGoalSchema = z.enum(["discover_new_products", "stock_optimization", "revenue_stock_opportunities"]);
 export const EvidenceTraceMetadataSchema = z.object({
   runId: z.string(),
   sourceProvider: SourceProviderSchema,
@@ -112,8 +165,19 @@ export const EvidenceTraceMetadataSchema = z.object({
 export const AssistantRunTraceSchema = z.object({
   runId: z.string(),
   assistantRunId: z.string(),
-  assistantType: SpecialistAssistantSchema,
+  analysisRunId: z.string().optional(),
+  agent: AgentTypeSchema.optional(),
+  assistantType: AgentTypeSchema,
+  businessGoal: BusinessGoalSchema.optional(),
+  goalIntent: z.string().optional(),
   status: AnalysisStatusSchema,
+  executionOrder: z.number().int().positive().optional(),
+  sourcesUsed: z.array(z.string()).default([]),
+  inputRefs: z.array(z.string()).default([]),
+  outputRef: z.string().optional(),
+  missingSignals: z.array(z.string()).default([]),
+  fallbackSignals: z.array(z.string()).default([]),
+  confidenceAdjustment: z.record(z.unknown()).default({}),
   startedAt: z.string(),
   completedAt: z.string().optional(),
   dataSourcesUsed: z.array(z.string()).default([]),
@@ -136,10 +200,9 @@ export const CoordinatorRunTraceSchema = z.object({
   assistantContributionSummary: z.record(z.string(), z.string()).default({}),
   confidence: z.number().min(0).max(1).optional(),
   riskScore: z.number().min(0).max(100).optional(),
-  sourceMode: NormalizedSourceModeSchema,
+  sourceMode: SourceModeSchema,
   fallbackUsed: z.boolean()
 });
-export const BusinessGoalSchema = z.enum(["discover_new_products", "stock_optimization", "revenue_stock_opportunities"]);
 export const InventorySourceStatusSchema = z.enum([
   "not_connected",
   "connected",
@@ -151,9 +214,19 @@ export const InventorySourceStatusSchema = z.enum([
 
 export const VisibleAssistants = [
   {
+    id: "orchestrator",
+    name: "AMI Orchestrator",
+    role: "Builds the goal-specific strategy, resolves conflicts, applies scoring rules, and produces the final recommendation."
+  },
+  {
+    id: "inventory",
+    name: "Inventory Assistant",
+    role: "Maps internal marketplace context, inventory health, cannibalization, restock need, and operational fit."
+  },
+  {
     id: "trend",
     name: "Trend Assistant",
-    role: "Detects demand signals, social momentum, seasonality, and product trend direction."
+    role: "Reads demand signals, market momentum, social direction, and product trend movement."
   },
   {
     id: "competitor",
@@ -164,21 +237,6 @@ export const VisibleAssistants = [
     id: "supplier",
     name: "Supplier Assistant",
     role: "Searches for suppliers and evaluates sourcing feasibility, margin potential, delivery windows, and supplier risk."
-  },
-  {
-    id: "inventory",
-    name: "Inventory Assistant",
-    role: "Evaluates inventory posture, stock risk, margin context, and operational opportunity."
-  },
-  {
-    id: "coordinator",
-    name: "Coordinator Agent",
-    role: "Compares specialist findings, detects agreements and conflicts, and isolates confidence gaps."
-  },
-  {
-    id: "strategy",
-    name: "Strategy Agent",
-    role: "Converts the synthesis into AMI's final business verdict, next step, and portable action payload."
   }
 ] as const;
 
@@ -301,9 +359,9 @@ export const EvidencePackageSchema = z.object({
   isFallback: z.boolean().default(false),
   scrapedAt: z.string(),
   productIdentity: z.string(),
-  currentPrice: z.number().nonnegative(),
-  supplierPrice: z.number().nonnegative(),
-  estimatedMargin: z.number(),
+  currentPrice: z.number().nonnegative().nullable(),
+  supplierPrice: z.number().nonnegative().nullable(),
+  estimatedMargin: z.number().nullable(),
   demandIndicators: z.array(z.string()),
   socialMomentum: SignalStrengthSchema,
   competitionLevel: z.enum(["low", "moderate", "high"]),
@@ -330,14 +388,20 @@ export const NormalizedProductSchema = z.object({
   externalId: z.string().optional(),
   title: z.string().min(1),
   canonicalTitle: z.string().optional(),
+  brand: z.string().optional(),
+  brandConfidence: z.enum(["low", "medium", "high", "unknown"]).optional(),
   category: z.string().optional(),
+  categoryPath: z.array(z.string()).optional(),
   price: z.number().nonnegative().optional(),
+  priceDataStatus: z.enum(["available", "missing"]).default("available"),
   currency: z.string().min(3).max(3).optional(),
   priceUsd: z.number().nonnegative().optional(),
   originalPriceUsd: z.number().nonnegative().optional(),
   rating: z.number().min(0).max(5).optional(),
   reviewsCount: z.number().int().nonnegative().optional(),
+  salesSignal: z.number().nonnegative().optional(),
   availability: z.string().optional(),
+  estimatedDeliveryDays: z.number().nonnegative().nullable().optional(),
   imageUrl: z.string().url().optional(),
   supplierName: z.string().optional(),
   supplierPrice: z.number().nonnegative().optional(),
@@ -352,7 +416,12 @@ export const NormalizedProductSchema = z.object({
   riskScore: z.number().min(0).max(100).optional(),
   confidence: z.number().min(0).max(1).optional(),
   lastUpdated: z.string().min(1),
-  evidenceRefs: z.array(z.string()).default([])
+  evidenceRefs: z.array(z.string()).default([]),
+  dataQuality: z.object({
+    missingFields: z.array(z.string()).default([]),
+    fallbackFields: z.array(z.string()).default([]),
+    sourceStatus: RawSourceStatusSchema.optional()
+  }).optional()
 });
 
 export const PreliminaryMetricsSchema = z.object({
@@ -364,7 +433,8 @@ export const PreliminaryMetricsSchema = z.object({
   trendMomentum: z.number().min(0).max(100),
   opportunityScoreBase: z.number().min(0).max(100),
   productCount: z.number().int().nonnegative(),
-  evidenceCount: z.number().int().nonnegative()
+  evidenceCount: z.number().int().nonnegative(),
+  canonicalMetrics: z.record(z.union([z.number(), z.null()])).default({})
 });
 
 const GraphPointSchema = z.object({
@@ -388,16 +458,42 @@ export const AgentRunStatusSchema = z.object({
   status: RuntimeAgentStatusSchema,
   label: z.string(),
   latestActivity: z.string(),
+  goalIntent: z.string().optional(),
+  executionOrder: z.number().int().positive().optional(),
+  sourcesUsed: z.array(z.string()).default([]),
+  contributionSummary: z.string().optional(),
+  fallbackSignals: z.array(z.string()).default([]),
+  missingSignals: z.array(z.string()).default([]),
+  confidenceAdjustment: z.record(z.unknown()).default({}),
   confidence: z.number().min(0).max(1).optional(),
   riskLevel: RiskLevelSchema.optional(),
   usedFallback: z.boolean().default(false)
 });
 
+export const RecommendationMetricsSchema = z.record(z.union([z.number(), z.null()]));
+export const RecommendationAgentContributionsSchema = z.object({
+  orchestrator: z.string().optional(),
+  inventoryInitial: z.string().optional(),
+  inventoryFinal: z.string().optional(),
+  trend: z.string().optional(),
+  competitor: z.string().optional(),
+  supplier: z.string().optional()
+});
 export const RecommendationSchema = z.object({
   recommendationId: z.string(),
   analysisRunId: z.string(),
   workspaceId: z.string(),
+  businessGoal: BusinessGoalSchema.optional(),
   recommendedAction: z.string().min(4),
+  opportunityType: z.string().optional(),
+  finalScore: z.number().min(0).max(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  risk: RiskLevelSchema.optional(),
+  reasoningSummary: z.string().optional(),
+  metrics: RecommendationMetricsSchema.default({}),
+  agentContributions: RecommendationAgentContributionsSchema.default({}),
+  dataQuality: DataQualitySchema.optional(),
+  evidenceRefs: z.array(z.string()).default([]),
   opportunityScore: z.number().min(0).max(100),
   estimatedMargin: z.number(),
   demandSignal: SignalStrengthSchema,
@@ -419,15 +515,19 @@ export const RecommendationSchema = z.object({
 export const AnalysisResultSchema = z.object({
   analysisRunId: z.string(),
   workspaceId: z.string(),
+  analysisRun: AnalysisRunContractSchema.optional(),
   marketContext: MarketContextPayloadSchema,
   status: AnalysisStatusSchema,
   startedAt: z.string(),
   completedAt: z.string().optional(),
-  sourceMode: NormalizedSourceModeSchema.default("demo_seed"),
+  sourceMode: SourceModeSchema.default("demo"),
   fallbackUsed: z.boolean().default(true),
   sourceProvider: SourceProviderSchema.default("unknown"),
   sourceProducts: z.array(z.string()).default([]),
   sourceSummary: SourceSummarySchema.optional(),
+  rawSourceSnapshots: z.array(RawSourceSnapshotRecordSchema).default([]),
+  rawSourceSummary: RawSourceSummarySchema.default({ success: [], partial: [], empty: [], failed: [] }),
+  dataQualitySummary: DataQualitySchema.optional(),
   rawSnapshotMetadata: z.array(RawSnapshotMetadataSchema).default([]),
   evidenceMetadata: z.array(EvidenceTraceMetadataSchema).default([]),
   assistantRunTrace: z.array(AssistantRunTraceSchema).default([]),
@@ -455,6 +555,7 @@ export const AnalysisResultSchema = z.object({
   preliminaryMetrics: PreliminaryMetricsSchema.optional(),
   graphData: GraphDataSchema.optional(),
   agentStatus: z.array(AgentRunStatusSchema).default([]),
+  assistantRuns: z.array(AssistantRunTraceSchema).default([]),
   agentRuns: z.array(AgentOutputUnion).default([]),
   synthesis: CoordinatorSynthesisOutputSchema.optional(),
   finalVerdict: VerdictAgentOutputSchema.optional(),
@@ -462,6 +563,7 @@ export const AnalysisResultSchema = z.object({
   usedFallback: z.boolean().default(false),
   fallbackReason: z.string().optional(),
   executiveRecommendation: RecommendationSchema,
+  recommendations: z.array(RecommendationSchema).default([]),
   opportunities: z.array(RecommendationSchema).min(1),
   assistantFindings: z.array(AssistantFindingSchema),
   evidencePackages: z.array(EvidencePackageSchema).min(1),
@@ -524,6 +626,13 @@ export type SignalStrength = z.infer<typeof SignalStrengthSchema>;
 export type NormalizedSourceMode = z.infer<typeof NormalizedSourceModeSchema>;
 export type SourceMode = z.infer<typeof SourceModeSchema>;
 export type SourceProvider = z.infer<typeof SourceProviderSchema>;
+export type AnalysisRunMode = z.infer<typeof AnalysisRunModeSchema>;
+export type CanonicalSourceMode = z.infer<typeof CanonicalSourceModeSchema>;
+export type RawSourceStatus = z.infer<typeof RawSourceStatusSchema>;
+export type DataQuality = z.infer<typeof DataQualitySchema>;
+export type AnalysisRunContract = z.infer<typeof AnalysisRunContractSchema>;
+export type RawSourceSnapshotRecord = z.infer<typeof RawSourceSnapshotRecordSchema>;
+export type RawSourceSummary = z.infer<typeof RawSourceSummarySchema>;
 export type SourceSummary = z.infer<typeof SourceSummarySchema>;
 export type RawSnapshotMetadata = z.infer<typeof RawSnapshotMetadataSchema>;
 export type EvidenceTraceMetadata = z.infer<typeof EvidenceTraceMetadataSchema>;
@@ -533,6 +642,7 @@ export type SourceProviderStatus = z.infer<typeof SourceProviderStatusSchema>;
 export type SourceProofItem = z.infer<typeof SourceProofItemSchema>;
 export type InventoryConnectionType = z.infer<typeof InventoryConnectionTypeSchema>;
 export type InventorySourceStatus = z.infer<typeof InventorySourceStatusSchema>;
+export type BusinessGoal = z.infer<typeof BusinessGoalSchema>;
 export type RegisterPayload = z.infer<typeof RegisterPayloadSchema>;
 export type LoginPayload = z.infer<typeof LoginPayloadSchema>;
 export type MarketContextPayload = z.infer<typeof MarketContextPayloadSchema>;

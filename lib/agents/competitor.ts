@@ -5,6 +5,12 @@ export function runCompetitorAgent(context: AgentContext): CompetitorAgentOutput
   const { briefing, metrics, products, evidenceRefs } = context;
   const highPressure = metrics.pricePressure >= 68;
   const availabilityGaps = products.filter((product) => product.availability?.toLowerCase().includes("limited")).length;
+  const goalIntent =
+    briefing.businessGoal === "discover_new_products"
+      ? "Filter saturated options and identify competitive whitespace."
+      : briefing.businessGoal === "stock_optimization"
+        ? "Check pricing pressure against current stock."
+        : "Detect price gaps, competitor stockouts, promotion pressure, and margin opportunity.";
 
   return CompetitorAgentOutputSchema.parse({
     agentType: "competitor",
@@ -12,7 +18,7 @@ export function runCompetitorAgent(context: AgentContext): CompetitorAgentOutput
     finding: highPressure
       ? "Competitor pricing pressure is high enough to favor a controlled promotion."
       : "Competitor pressure is present but leaves room for margin-protected action.",
-    reasoning: `${briefing.targetMarketplace} signals show price pressure ${metrics.pricePressure}/100 across ${products.length} normalized product records.`,
+    reasoning: `${goalIntent} ${briefing.targetMarketplace} signals show price pressure ${metrics.pricePressure}/100 across ${products.length} normalized product records.`,
     confidence: Math.min(0.88, 0.58 + products.length / 15 + metrics.pricePressure / 400),
     riskLevel: highPressure ? "medium" : "low",
     suggestedAction: highPressure

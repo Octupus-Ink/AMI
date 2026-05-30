@@ -18,28 +18,30 @@ Marketplace decisions are time-sensitive and often made from stale or incomplete
 
 ## Solution Overview
 
-AMI is the main advisor and coordinator. It receives the market context, requests live product/web data through Bright Data first, normalizes compact evidence, coordinates a data-driven agent list, and returns a prioritized business verdict.
+AMI is the main advisor and decision resolver. It receives the market context, requests live product/web data through Bright Data first, normalizes compact evidence, coordinates the official five-agent model, and returns a prioritized business verdict.
 
-- Trend Assistant: detects demand signals, social momentum, seasonality, and product trend direction.
-- Competitor Assistant: tracks competitor pricing, promotions, availability, and market pressure.
-- Supplier Assistant: evaluates sourcing feasibility, unit cost, delivery windows, and supplier risk.
-- Inventory Assistant: evaluates inventory posture, stock risk, margin context, and operational opportunity.
-- Coordinator Agent: compares specialist outputs, detects agreements/conflicts, and identifies confidence gaps.
-- Strategy Agent: produces the final AMI verdict, recommended action, next step, and external action payload.
+- AMI Orchestrator: builds goal-specific strategy, assigns assistant intent, resolves conflicts, applies scoring, and produces the final recommendation.
+- Inventory Assistant: maps internal marketplace context, inventory health, cannibalization, restock need, and operational fit.
+- Trend Assistant: detects demand signals, market momentum, social momentum, and product trend direction.
+- Competitor Assistant: tracks competitor pricing, promotions, saturation, availability gaps, and market pressure.
+- Supplier Assistant: evaluates sourcing feasibility, availability, unit cost, delivery windows, supplier trust, and supplier risk.
 
 The integration-ready analysis pipeline is:
 
 ```txt
 User Briefing
 -> Bright Data live collection
+-> Raw source classification
 -> Safe evidence references
 -> Normalization + KPI extraction
 -> Immediate graph data
--> AI agent analysis
--> Cross-agent synthesis
--> Final AMI verdict
+-> Goal-directed assistant execution
+-> AMI Orchestrator conflict resolution
+-> Final recommendation
 -> Portable action payload
 ```
+
+Detailed operating-model alignment is documented in [`docs/AMI_OPERATING_MODEL_ALIGNMENT.md`](docs/AMI_OPERATING_MODEL_ALIGNMENT.md).
 
 ## Six Macro Screen Architecture
 
@@ -58,13 +60,13 @@ The code includes Bright Data provider adapters for:
 - Web Scraper API
 - Web Unlocker
 
-Bright Data is always attempted before fallback when `AMI_USE_LIVE_WEB=true`. AMI prefers a configured structured dataset, then Web Unlocker, then SERP. Results are capped to a maximum of 5 products per analysis. Raw HTML and full scraped pages are not sent to the LLM; only normalized product JSON, KPIs, and safe evidence summaries are used downstream.
+Bright Data is always attempted before fallback when `AMI_USE_LIVE_WEB=true`. AMI prefers a configured structured dataset, then Web Unlocker, then SERP. Facebook Marketplace can be configured as a trend/marketplace source through `BRIGHT_DATA_FACEBOOK_MARKETPLACE_*` variables. Results are capped to a maximum of 5 products per analysis. Raw HTML and full scraped pages are not sent to the LLM; only normalized product JSON, KPIs, and safe evidence summaries are used downstream.
 
-If Bright Data fails and `AMI_ALLOW_DEMO_FALLBACK=true`, AMI uses deterministic Bright Data-shaped fallback data and marks the run as fallback.
+Each raw source response is classified as `success`, `partial`, `empty`, or `failed` before normalization. If Bright Data fails and `AMI_ALLOW_DEMO_FALLBACK=true`, AMI uses deterministic Bright Data-shaped fallback data or preserved raw snapshots, marks the run as fallback/mixed where appropriate, exposes fallback details in data quality, and reduces confidence.
 
 ## AIMLAPI Requirement
 
-AIMLAPI is used only for compact JSON analysis. Specialist agents run deterministic local analysis first; the Coordinator and Strategy/Verdict agents call AIMLAPI when configured. If AIMLAPI is disabled, missing, or returns invalid JSON, AMI falls back to deterministic synthesis and still returns a usable final report.
+AIMLAPI is used only for compact JSON analysis. Specialist agents run deterministic local analysis first; AMI Orchestrator calls AIMLAPI when configured for synthesis and final verdict. If AIMLAPI is disabled, missing, or returns invalid JSON, AMI falls back to deterministic synthesis and still returns a usable final report.
 
 ## Tech Stack Detected From Repo
 
@@ -118,6 +120,13 @@ BRIGHT_DATA_SERP_ZONE=ami_marketplace_unlocker
 BRIGHT_DATA_WEB_UNLOCKER_ENDPOINT=https://api.brightdata.com/request
 BRIGHT_DATA_SERP_ENDPOINT=https://api.brightdata.com/request
 BRIGHT_DATA_WEB_SCRAPER_ENDPOINT=https://api.brightdata.com/datasets/v3/scrape
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_DATASET_ID=
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_ENABLED=false
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_DISCOVER_TYPE=discover_new
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_DISCOVER_BY=keyword
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_INPUT_KEY=keyword
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_DEFAULT_CITY=New York
+BRIGHT_DATA_FACEBOOK_MARKETPLACE_DEFAULT_DATE_LISTED=
 BRIGHT_DATA_TIMEOUT_MS=30000
 BRIGHT_DATA_MAX_REQUESTS_PER_ANALYSIS=5
 AMI_USE_LIVE_WEB=true
@@ -181,9 +190,15 @@ Saved inventory status includes connection type, credential type, source summary
 
 Inventory context must not block every analysis goal.
 
-- `discover_new_products`: inventory is optional. If `useInventoryContext` is true but no usable inventory source is connected, AMI continues with trend, competitor, and supplier signals. The Inventory Assistant is marked as warning/skipped and the final strategy includes an inventory warning.
+- `discover_new_products`: Inventory -> Trend -> Competitor -> Supplier -> AMI Orchestrator. Inventory is optional. If `useInventoryContext` is true but no usable inventory source is connected, AMI continues with trend, competitor, and supplier signals. The Inventory Assistant is marked as warning/skipped and the final recommendation includes an inventory warning.
 - `stock_optimization`: inventory is required. Missing inventory returns a clear validation error instead of leaving the run pending.
 - `revenue_stock_opportunities`: inventory is required. Missing inventory returns a clear validation error instead of leaving the run pending.
+
+Stock Optimization runs Inventory -> Competitor + Trend -> Supplier optional -> AMI Orchestrator. If `stockProtectionScore > stockActionScore`, AMI does not recommend discounting.
+
+Revenue Stock Opportunities runs Inventory -> Trend + Competitor -> Supplier or Inventory validation -> AMI Orchestrator.
+
+AMI scoring is centralized in `lib/agents/formulas.ts`. `weightedAvailableScore` ignores `null` and unknown metrics, recalculating available weights instead of silently converting missing fields to zero.
 
 Demo fallback never fails only because inventory is missing. When no usable inventory source is available, AMI skips inventory context, returns a complete strategy result, and includes a warning.
 
