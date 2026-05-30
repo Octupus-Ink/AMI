@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const AgentTypeSchema = z.enum(["trend", "competitor", "supplier", "inventory", "coordinator", "strategy"]);
+export const AgentTypeSchema = z.enum(["orchestrator", "inventory", "trend", "competitor", "supplier"]);
 export const AgentStatusSchema = z.enum(["pending", "running", "completed", "warning", "failed", "skipped", "fallback"]);
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical", "unknown"]);
 
@@ -17,7 +17,7 @@ export const EvidenceRefSchema = z.object({
 });
 
 export const AgentFindingSchema = z.object({
-  agentType: AgentTypeSchema.exclude(["coordinator", "strategy"]),
+  agentType: AgentTypeSchema.exclude(["orchestrator"]),
   status: AgentStatusSchema,
   finding: z.string().min(4),
   reasoning: z.string().min(4),
@@ -145,9 +145,9 @@ function normalizeCoordinatorResponse(value: unknown) {
     [...agreements, ...conflicts, ...decisionFactors][0] ??
     "Coordinator synthesized specialist agent outputs.";
 
-  return {
-    ...record,
-    agentType: "coordinator",
+    return {
+      ...record,
+      agentType: "orchestrator",
     status: normalizeEnumText(record.status, "completed"),
     summary,
     agreements,
@@ -163,7 +163,7 @@ function normalizeCoordinatorResponse(value: unknown) {
 }
 
 export const CoordinatorSynthesisOutputSchema = z.preprocess(normalizeCoordinatorResponse, z.object({
-  agentType: z.literal("coordinator"),
+  agentType: z.literal("orchestrator"),
   status: AgentStatusSchema,
   summary: z.string().min(4),
   agreements: z.array(z.string()).default([]),
@@ -213,7 +213,7 @@ function normalizeVerdictResponse(value: unknown) {
   const finalVerdict =
     readString(record, ["finalVerdict", "final_verdict", "verdict", "summary"]) ??
     readString(record, ["recommendedAction", "recommended_action", "action"]) ??
-    "AMI generated a strategy verdict from the available evidence.";
+    "AMI generated an orchestrator verdict from the available evidence.";
   const recommendedAction =
     readString(record, ["recommendedAction", "recommended_action", "action", "recommendation"]) ?? finalVerdict;
   const nextStep =
@@ -228,7 +228,7 @@ function normalizeVerdictResponse(value: unknown) {
 
   return {
     ...record,
-    agentType: "strategy",
+    agentType: "orchestrator",
     status: normalizeEnumText(record.status, "completed"),
     finalVerdict,
     recommendedAction,
@@ -255,7 +255,7 @@ function normalizeVerdictResponse(value: unknown) {
 }
 
 export const VerdictAgentOutputSchema = z.preprocess(normalizeVerdictResponse, z.object({
-  agentType: z.literal("strategy"),
+  agentType: z.literal("orchestrator"),
   status: AgentStatusSchema,
   finalVerdict: z.string().min(4),
   recommendedAction: z.string().min(4),

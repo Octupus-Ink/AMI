@@ -49,17 +49,21 @@ export async function POST(request: NextRequest) {
           agentStatus: metricsReady.agentStatus.map((entry) => ({
             ...entry,
             status:
-              entry.agentType === "trend" ||
-              entry.agentType === "competitor" ||
-              entry.agentType === "supplier" ||
-              entry.agentType === "inventory"
+              entry.status === "skipped"
+                ? "skipped"
+                : entry.agentType === "trend" ||
+                    entry.agentType === "competitor" ||
+                    entry.agentType === "supplier" ||
+                    entry.agentType === "inventory"
                 ? "running"
                 : "pending",
             latestActivity:
-              entry.agentType === "trend" ||
-              entry.agentType === "competitor" ||
-              entry.agentType === "supplier" ||
-              entry.agentType === "inventory"
+              entry.status === "skipped"
+                ? entry.latestActivity
+                : entry.agentType === "trend" ||
+                    entry.agentType === "competitor" ||
+                    entry.agentType === "supplier" ||
+                    entry.agentType === "inventory"
                 ? "Running deterministic specialist analysis on compact KPIs."
                 : entry.latestActivity
           }))

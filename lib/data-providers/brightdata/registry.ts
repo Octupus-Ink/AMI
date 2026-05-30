@@ -48,6 +48,10 @@ export function marketplaceKeyForContext(context: MarketContextPayload): BrightD
     return "tiktok";
   }
 
+  if (text.includes("facebook") || text.includes("fb marketplace")) {
+    return "facebook";
+  }
+
   return "marketplace";
 }
 
@@ -101,6 +105,10 @@ export function buildMarketplaceSearchUrl(context: MarketContextPayload) {
 
   if (marketplace === "alibaba") {
     return `https://www.alibaba.com/trade/search?SearchText=${query}`;
+  }
+
+  if (marketplace === "facebook") {
+    return `https://www.facebook.com/marketplace/search/?query=${query}`;
   }
 
   return `https://www.google.com/search?q=${query}`;
@@ -166,6 +174,37 @@ export function resolveBrightDataOperation(
       discoverBy: detected.inputType === "keyword" ? config.ebayKeywordDiscoverBy || "keywords" : undefined,
       inputKey,
       input: { [inputKey]: detected.inputValue }
+    };
+  }
+
+  if (marketplace === "facebook" && config.facebookMarketplaceEnabled && config.facebookMarketplaceDatasetId) {
+    const inputKey = config.facebookMarketplaceInputKey || "keyword";
+    const input: Record<string, string> = {
+      [inputKey]: detected.inputValue
+    };
+
+    if (config.facebookMarketplaceDefaultCity) {
+      input.city = config.facebookMarketplaceDefaultCity;
+    }
+
+    if (config.facebookMarketplaceDefaultDateListed) {
+      input.date_listed = config.facebookMarketplaceDefaultDateListed;
+    }
+
+    return {
+      marketplace,
+      inputType: "keyword",
+      product: "Web Scraper API",
+      sourceProduct: "web_scraper_api",
+      sourceName: "Facebook Marketplace",
+      sourceType: "facebook_marketplace",
+      scraperName: "Facebook Marketplace",
+      operation: "facebook_marketplace_keyword",
+      datasetId: config.facebookMarketplaceDatasetId,
+      discoverType: config.facebookMarketplaceDiscoverType || "discover_new",
+      discoverBy: config.facebookMarketplaceDiscoverBy || "keyword",
+      inputKey,
+      input
     };
   }
 

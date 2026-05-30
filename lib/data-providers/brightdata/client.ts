@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join } from "node:path";
 import type { MarketContextPayload } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import type { NormalizedProduct } from "@/lib/schemas/ami";
@@ -38,6 +38,7 @@ const FALLBACK_RAW_SNAPSHOTS = [
   {
     marketplace: "amazon",
     ref: "data/brightdata/raw/amazon/search/2026-05-27-amazon-products-search.raw.json",
+    pathSegments: ["amazon", "search", "2026-05-27-amazon-products-search.raw.json"],
     sourceName: "Amazon Products Search",
     sourceType: "amazon_products_search",
     product: "Web Scraper API" as BrightDataProduct
@@ -45,6 +46,7 @@ const FALLBACK_RAW_SNAPSHOTS = [
   {
     marketplace: "ebay",
     ref: "data/brightdata/raw/ebay/product-detail/2026-05-27-ebay-product-detail-sample.raw.json",
+    pathSegments: ["ebay", "product-detail", "2026-05-27-ebay-product-detail-sample.raw.json"],
     sourceName: "eBay Product URL",
     sourceType: "ebay_product_url",
     product: "Web Scraper API" as BrightDataProduct
@@ -99,7 +101,14 @@ export function getBrightDataConfig(): BrightDataConfig {
     ebayShopUrlInputKey: process.env.BRIGHT_DATA_EBAY_SHOP_URL_INPUT_KEY?.trim(),
     alibabaProductsDatasetId: process.env.BRIGHT_DATA_ALIBABA_PRODUCTS_DATASET_ID?.trim(),
     aliexpressProductsDatasetId: process.env.BRIGHT_DATA_ALIEXPRESS_PRODUCTS_DATASET_ID?.trim(),
-    tiktokShopProductsDatasetId: process.env.BRIGHT_DATA_TIKTOK_SHOP_PRODUCTS_DATASET_ID?.trim()
+    tiktokShopProductsDatasetId: process.env.BRIGHT_DATA_TIKTOK_SHOP_PRODUCTS_DATASET_ID?.trim(),
+    facebookMarketplaceDatasetId: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_DATASET_ID?.trim(),
+    facebookMarketplaceEnabled: readBoolean(process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_ENABLED, false),
+    facebookMarketplaceDiscoverType: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_DISCOVER_TYPE?.trim(),
+    facebookMarketplaceDiscoverBy: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_DISCOVER_BY?.trim(),
+    facebookMarketplaceInputKey: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_INPUT_KEY?.trim(),
+    facebookMarketplaceDefaultCity: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_DEFAULT_CITY?.trim(),
+    facebookMarketplaceDefaultDateListed: process.env.BRIGHT_DATA_FACEBOOK_MARKETPLACE_DEFAULT_DATE_LISTED?.trim()
   };
 }
 
@@ -151,7 +160,12 @@ function sourceNameForProduct(product: BrightDataProduct, context: MarketContext
 }
 
 function hasLiveAttempt(attempts: BrightDataAttempt[]) {
-  return attempts.some((attempt) => attempt.status === "success" || attempt.status === "failed" || attempt.status === "empty");
+  return attempts.some((attempt) => attempt.status === "success" || attempt.status === "partial" || attempt.status === "failed" || attempt.status === "empty");
+}
+
+function normalizedStatus(products: NormalizedProduct[]): "success" | "partial" {
+  const missingCritical = products.some((product) => !product.priceUsd || !product.reviewsCount || !product.availability || product.priceDataStatus === "missing");
+  return missingCritical ? "partial" : "success";
 }
 
 function loadFallbackSnapshot(context: MarketContextPayload, collectedAt: string, maxResults: number): FallbackSnapshot | null {
@@ -161,7 +175,7 @@ function loadFallbackSnapshot(context: MarketContextPayload, collectedAt: string
     return null;
   }
 
-  const absolutePath = resolve(process.cwd(), candidate.ref);
+  const absolutePath = join(process.cwd(), "data", "brightdata", "raw", ...candidate.pathSegments);
 
   if (!existsSync(absolutePath)) {
     return null;
@@ -369,11 +383,16 @@ async function attemptStructuredScraper(
       };
     }
 
+    const status = normalizedStatus(normalized.products);
+
     return {
       attempt: {
         product: "Web Scraper API",
-        status: "success",
-        message: "Structured Bright Data scraper returned normalized product records.",
+        status,
+        message:
+          status === "partial"
+            ? "Structured Bright Data scraper returned product records with missing critical fields."
+            : "Structured Bright Data scraper returned normalized product records.",
         sourceProduct: operation.sourceProduct,
         sourceName: operation.sourceName,
         marketplace: operation.marketplace,
@@ -457,11 +476,16 @@ async function attemptWebUnlocker(
     throw new Error("Web Unlocker returned no product-like records.");
   }
 
-  return {
-    attempt: {
-      product: "Web Unlocker",
-      status: "success",
-      message: "Bright Data Web Unlocker returned safe summarized evidence.",
+    const status = normalizedStatus(normalized.products);
+
+    return {
+      attempt: {
+        product: "Web Unlocker",
+        status,
+        message:
+          status === "partial"
+            ? "Bright Data Web Unlocker returned product-like records with partial fields."
+            : "Bright Data Web Unlocker returned safe summarized evidence.",
       sourceProduct: "web_unlocker",
       sourceName: "Marketplace Search via Web Unlocker",
       marketplace: marketplaceKeyForContext(context),

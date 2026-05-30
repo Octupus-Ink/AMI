@@ -7,7 +7,7 @@ export type BrightDataProviderStatus = "live" | "fallback" | "not_configured" | 
 export type BrightDataFallbackKind = "none" | "snapshot" | "demo_seed";
 export type BrightDataSourceProvider = "brightdata" | "demo" | "unknown";
 export type BrightDataSourceProduct = "web_scraper_api" | "web_unlocker" | "serp_api" | "demo_seed" | "unknown";
-export type BrightDataMarketplace = "amazon" | "ebay" | "alibaba" | "aliexpress" | "tiktok" | "marketplace";
+export type BrightDataMarketplace = "amazon" | "ebay" | "alibaba" | "aliexpress" | "tiktok" | "facebook" | "marketplace";
 export type BrightDataInputType = "keyword" | "category_url" | "product_url" | "shop_url";
 
 export type BrightDataConfig = {
@@ -41,6 +41,13 @@ export type BrightDataConfig = {
   alibabaProductsDatasetId?: string;
   aliexpressProductsDatasetId?: string;
   tiktokShopProductsDatasetId?: string;
+  facebookMarketplaceDatasetId?: string;
+  facebookMarketplaceEnabled: boolean;
+  facebookMarketplaceDiscoverType?: string;
+  facebookMarketplaceDiscoverBy?: string;
+  facebookMarketplaceInputKey?: string;
+  facebookMarketplaceDefaultCity?: string;
+  facebookMarketplaceDefaultDateListed?: string;
 };
 
 export type BrightDataOperation = {
@@ -61,7 +68,7 @@ export type BrightDataOperation = {
 
 export type BrightDataAttempt = {
   product: BrightDataProduct;
-  status: "success" | "skipped" | "failed" | "empty";
+  status: "success" | "partial" | "skipped" | "failed" | "empty";
   message: string;
   safeError?: string;
   sourceName?: string;

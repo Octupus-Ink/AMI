@@ -35,6 +35,14 @@ function formatMode(mode: SourceMode | string) {
     return "Live Bright Data data";
   }
 
+  if (mode === "demo") {
+    return "Demo";
+  }
+
+  if (mode === "fallback") {
+    return "Fallback";
+  }
+
   if (mode === "fallback_snapshot") {
     return "Fallback snapshot";
   }
@@ -48,7 +56,7 @@ function formatMode(mode: SourceMode | string) {
   }
 
   if (mode === "mixed") {
-    return "Fallback snapshot";
+    return "Mixed live + fallback";
   }
 
   if (mode === "error" || mode === "not_configured") {
@@ -145,7 +153,7 @@ type SupplierDrawerDetail = {
   supplier: SupplierOption;
   sourceMode: string;
   marketplace?: string;
-  supplierPrice?: number;
+  supplierPrice?: number | null;
   brightDataProduct?: string;
   brightDataMode?: string;
   riskInputs?: string[];
@@ -180,6 +188,35 @@ function formatMargin(estimatedMargin: number | undefined) {
   }
 
   return `Est. margin ${estimatedMargin.toFixed(1)}%`;
+}
+
+function formatNullableMoney(value: number | null | undefined) {
+  return value === null || value === undefined ? "Unknown" : `$${value.toFixed(2)}`;
+}
+
+function dataQualityCopy(analysis: AnalysisResult) {
+  const quality = analysis.dataQualitySummary ?? analysis.executiveRecommendation.dataQuality;
+
+  if (!quality || quality.status === "success") {
+    return null;
+  }
+
+  const sourceIssue = [
+    quality.failedSources.length ? `${quality.failedSources.join(", ")} failed during collection.` : "",
+    quality.partialSources.length ? `${quality.partialSources.join(", ")} returned partial fields.` : "",
+    quality.emptySources.length ? `${quality.emptySources.join(", ")} returned no product records.` : ""
+  ].filter(Boolean)[0];
+  const fallback = quality.fallbacksUsed.length
+    ? `AMI inferred missing signals using ${quality.fallbacksUsed.join(", ")}.`
+    : "AMI preserved unknown signals instead of converting missing data to zero.";
+  const validation = quality.missingCriticalFields.length
+    ? `Review ${quality.missingCriticalFields.join(", ")} before acting.`
+    : "Review evidence before acting.";
+
+  return {
+    title: `Data quality: ${quality.status.charAt(0).toUpperCase()}${quality.status.slice(1)}`,
+    body: [sourceIssue, fallback, validation].filter(Boolean).join(" ")
+  };
 }
 
 function formatPromoMeta(input: PromoMetaInput) {
@@ -581,7 +618,7 @@ function formatMatchQualityLabel(value: string) {
 }
 
 function formatCandidateUnitCost(evidence: EvidencePackage | undefined, supplier: SupplierOption) {
-  if (evidence?.supplierPrice !== undefined) {
+  if (evidence?.supplierPrice !== undefined && evidence.supplierPrice !== null) {
     return `$${evidence.supplierPrice.toFixed(2)}`;
   }
 
@@ -680,6 +717,10 @@ function useDrawerLock(onClose: () => void) {
 function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
   const evidence = analysis.evidencePackages[0];
 
+  if (evidence?.supplierPrice === null || evidence?.supplierPrice === undefined) {
+    return [];
+  }
+
   return [
     {
       supplierName: "Verified supplier catalog option",
@@ -766,6 +807,7 @@ export function RecommendationsClient() {
   const inventoryActionCount = analysis.assistantFindings.filter(
     (finding) => finding.assistantId === "inventory" && analysis.assistantStatus?.inventory !== "skipped"
   ).length;
+  const qualityNotice = dataQualityCopy(analysis);
 
   return (
     <PageShell>
@@ -803,6 +845,48 @@ export function RecommendationsClient() {
           <div className="flex items-start gap-3">
             <ShieldAlert className="mt-1 text-amber-800" size={20} />
             <p className="text-sm leading-6 text-amber-950">{safeDisplay(analysis.warnings[0], 360)}</p>
+          </div>
+        </section>
+      )}
+
+      <Section className="border-b border-slate-200 pb-6">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <div>
+            <p className="text-xs font-semibold uppercase text-slate-500">Final recommendation</p>
+            <h2 className="mt-2 text-2xl font-semibold leading-tight text-slate-950">{selected.recommendedAction}</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+              {selected.reasoningSummary ?? selected.primaryReason}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Badge tone="teal">Score {selected.finalScore !== undefined ? Math.round(selected.finalScore * 100) : selected.opportunityScore}</Badge>
+              <Badge tone={riskBadgeTone(selected.risk ?? selected.riskLevel)}>Risk {selected.risk ?? selected.riskLevel}</Badge>
+              <Badge tone="blue">
+                Confidence {selected.confidence !== undefined ? Math.round(selected.confidence * 100) : selected.confidenceLevel}
+              </Badge>
+              {selected.opportunityType && <Badge tone="neutral">{selected.opportunityType.replace(/_/g, " ")}</Badge>}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase text-slate-500">Primary metrics</p>
+            <dl className="mt-3 flex flex-col gap-2 text-sm">
+              <MetricLine label="Demand" value={selected.metrics.demandScore !== undefined && selected.metrics.demandScore !== null ? `${Math.round(selected.metrics.demandScore * 100)}/100` : selected.demandSignal} />
+              <MetricLine label="Trend" value={selected.metrics.trendMomentum !== undefined && selected.metrics.trendMomentum !== null ? `${Math.round(selected.metrics.trendMomentum * 100)}/100` : selected.signalStrength} />
+              <MetricLine label="Supplier" value={selected.metrics.supplierAvailability !== undefined && selected.metrics.supplierAvailability !== null ? `${Math.round(selected.metrics.supplierAvailability * 100)}/100` : "Validation required"} />
+              <MetricLine label="Est. margin" value={selected.metrics.estimatedGrossMarginPct !== undefined && selected.metrics.estimatedGrossMarginPct !== null ? `${Math.round(selected.metrics.estimatedGrossMarginPct * 100)}%` : formatMargin(selected.estimatedMargin) ?? "Unknown"} />
+              <MetricLine label="ROI" value={selected.metrics.estimatedROI !== undefined && selected.metrics.estimatedROI !== null ? `${Math.round(selected.metrics.estimatedROI * 100)}%` : "Unknown"} />
+            </dl>
+          </div>
+        </div>
+      </Section>
+
+      {qualityNotice && (
+        <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-1 text-amber-800" size={20} />
+            <div>
+              <p className="text-sm font-semibold text-amber-950">{qualityNotice.title}</p>
+              <p className="mt-1 text-sm leading-6 text-amber-950">{qualityNotice.body}</p>
+            </div>
           </div>
         </section>
       )}
@@ -929,6 +1013,15 @@ function Counter({ label, value }: { label: string; value: number }) {
     <div className="min-w-36 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function MetricLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-2 last:border-b-0 last:pb-0">
+      <dt className="text-slate-600">{label}</dt>
+      <dd className="font-semibold text-slate-950">{value}</dd>
     </div>
   );
 }
@@ -1148,8 +1241,8 @@ function ActiveTabContent({
             <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
             <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
             <Comparison label="Bright Data product" value={evidence.brightDataProduct} />
-            <Comparison label="Current price" value={`$${evidence.currentPrice.toFixed(2)}`} />
-            <Comparison label="Supplier price" value={`$${evidence.supplierPrice.toFixed(2)}`} />
+            <Comparison label="Current price" value={formatNullableMoney(evidence.currentPrice)} />
+            <Comparison label="Supplier price" value={formatNullableMoney(evidence.supplierPrice)} />
             <Comparison label="Matched attributes" value={evidence.matchedAttributes.join(", ")} />
             <Comparison label="Demand indicators" value={evidence.demandIndicators.join(", ")} />
             <Comparison label="Risk inputs" value={evidence.riskInputs.join(", ")} />
@@ -1501,8 +1594,8 @@ function ItemDetailDrawer({
                     <DrawerField label="Source marketplace" value={detail.evidence.sourceMarketplace} />
                     <DrawerField label="Source mode" value={formatMode(detail.evidence.brightDataMode)} />
                     <DrawerField label="Bright Data product" value={detail.evidence.brightDataProduct} />
-                    <DrawerField label="Current price" value={`$${detail.evidence.currentPrice.toFixed(2)}`} />
-                    <DrawerField label="Supplier price" value={`$${detail.evidence.supplierPrice.toFixed(2)}`} />
+                    <DrawerField label="Current price" value={formatNullableMoney(detail.evidence.currentPrice)} />
+                    <DrawerField label="Supplier price" value={formatNullableMoney(detail.evidence.supplierPrice)} />
                     <DrawerField label="Matched attributes" value={detail.evidence.matchedAttributes.join(", ")} />
                     <DrawerField label="Demand indicators" value={detail.evidence.demandIndicators.join(", ")} />
                     <DrawerField label="Risk inputs" value={detail.evidence.riskInputs.join(", ")} />
@@ -1752,7 +1845,7 @@ function SupplierDetailDrawer({
             <dl className="mt-3 flex flex-col gap-2">
               <DrawerField label="Unit cost" value={`$${supplier.estimatedUnitCost.toFixed(2)}`} />
               <DrawerField label="Delivery estimate" value={formatDeliveryBatch(supplier.estimatedDeliveryTime)} />
-              {detail.supplierPrice !== undefined && (
+              {detail.supplierPrice !== undefined && detail.supplierPrice !== null && (
                 <DrawerField label="Supplier price" value={`$${detail.supplierPrice.toFixed(2)}`} />
               )}
             </dl>

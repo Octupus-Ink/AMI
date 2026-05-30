@@ -19,12 +19,34 @@ function fallbackVerdict(
   const highPricePressure = context.metrics.pricePressure >= 65;
   const lowTrend = context.metrics.trendMomentum < 58;
   const supplierRisk = findings.find((finding) => finding.agentType === "supplier")?.riskLevel ?? "medium";
-  const finalVerdict = highPricePressure
-    ? "Prioritize a limited promotion before restocking."
-    : "Prioritize a controlled sourcing validation before scaling.";
-  const recommendedAction = highPricePressure
-    ? "Run an 8-10% temporary discount for 48 hours and monitor velocity before increasing inventory."
-    : "Validate supplier terms on the top product candidates and monitor competitor pricing before purchase approval.";
+  const scores = context.metrics.canonicalMetrics;
+  const stockProtection = typeof scores.stockProtectionScore === "number" ? scores.stockProtectionScore : 0;
+  const stockAction = typeof scores.stockActionScore === "number" ? scores.stockActionScore : 0;
+  const supplierAvailability = typeof scores.supplierAvailability === "number" ? scores.supplierAvailability : null;
+  const finalVerdict =
+    context.briefing.businessGoal === "stock_optimization"
+      ? stockProtection > stockAction
+        ? "Protect stock position instead of discounting."
+        : highPricePressure
+          ? "Prioritize a controlled stock action."
+          : "Keep stock action measured while monitoring velocity."
+      : context.briefing.businessGoal === "revenue_stock_opportunities"
+        ? "Prioritize the strongest revenue expansion opportunity."
+        : supplierAvailability !== null && supplierAvailability < 0.45
+          ? "Treat this as supplier validation before sourcing."
+          : "Prioritize a controlled sourcing validation before scaling.";
+  const recommendedAction =
+    context.briefing.businessGoal === "stock_optimization"
+      ? stockProtection > stockAction
+        ? "Protect margin, review restock timing, and avoid discounting until demand weakens."
+        : highPricePressure
+          ? "Run a controlled bundle, reprice, or short discount while monitoring velocity."
+          : "Pause aggressive stock changes and validate demand direction first."
+      : context.briefing.businessGoal === "revenue_stock_opportunities"
+        ? "Prioritize the revenue opportunity, then validate supplier leverage or internal execution fit before scaling."
+        : supplierAvailability !== null && supplierAvailability < 0.45
+          ? "Validate supplier availability and delivery terms before taking sourcing action."
+          : "Validate supplier terms on the top product candidates and monitor competitor pricing before purchase approval.";
   const confidence = Math.min(0.9, Math.max(0.55, synthesis.confidence));
   const riskLevel: RiskLevel = supplierRisk === "high" || context.metrics.inventoryRisk >= 75 ? "high" : lowTrend ? "medium" : "medium";
   const base = {
@@ -33,23 +55,27 @@ function fallbackVerdict(
   };
 
   return VerdictAgentOutputSchema.parse({
-    agentType: "strategy",
+    agentType: "orchestrator",
     status,
     finalVerdict,
     recommendedAction,
     reasoning:
-      "Competitor pressure, supplier margin, trend momentum, and inventory risk support action only as a measured business test.",
+      "AMI compared goal-specific agent outputs, null-safe metrics, conflict rules, data quality, and fallback limits before choosing the final action.",
     confidence,
     riskLevel,
-    nextStep: "Validate supplier delivery time and review product velocity after the promotion or sourcing validation window.",
+    nextStep:
+      context.dataQuality.fallbacksUsed.length || context.dataQuality.failedSources.length
+        ? "Review degraded source signals and validate supplier or demand assumptions before acting."
+        : "Review evidence, validate execution constraints, and monitor the selected metric after the action window.",
     agentAgreement: synthesis.agreements,
     agentConflicts: synthesis.conflicts,
     evidenceSummary: [
       `Competitor pricing pressure is ${context.metrics.pricePressure}/100.`,
       `Estimated supplier-backed margin is ${context.metrics.estimatedMargin.toFixed(1)}%.`,
       `Trend momentum is ${context.metrics.trendMomentum}/100.`,
-      `Inventory risk is ${context.metrics.inventoryRisk}/100.`
-    ],
+      `Inventory risk is ${context.metrics.inventoryRisk}/100.`,
+      context.dataQuality.fallbacksUsed.length ? `Fallbacks used: ${context.dataQuality.fallbacksUsed.join(", ")}.` : ""
+    ].filter(Boolean),
     externalActionPayload: buildExternalActionPayload(context.analysisRunId, base, context.products)
   });
 }
@@ -73,7 +99,7 @@ export async function runVerdictAgent(
     synthesis,
     requiredStyle: "Finding -> Reason -> Confidence/Risk -> Suggested next step. Business advisor tone, not chatbot tone.",
     requiredJsonShape: {
-      agentType: "strategy",
+      agentType: "orchestrator",
       status: "completed",
       finalVerdict: "One concise final business verdict.",
       recommendedAction: "Specific action AMI recommends.",
@@ -95,7 +121,7 @@ export async function runVerdictAgent(
   };
   const live = await generateVerdictJson(
     VerdictAgentOutputSchema,
-    "You are AMI's Strategy Agent. Produce the final AMI business verdict as strict JSON with recommendedAction, reasoning, confidence, riskLevel, nextStep, agreements, conflicts, evidenceSummary, and externalActionPayload. Do not call external systems.",
+    "You are AMI's Orchestrator. Produce the final AMI business verdict as strict JSON with recommendedAction, reasoning, confidence, riskLevel, nextStep, agreements, conflicts, evidenceSummary, and externalActionPayload. Follow the selected business goal and blocker rules. Do not call external systems.",
     compactPayload
   );
 

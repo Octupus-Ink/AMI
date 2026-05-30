@@ -7,11 +7,11 @@ import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle, toHttpSourceUrl } from 
 import type { BrightDataPayloadContext, BrightDataProduct } from "@/lib/data-providers/brightdata/types";
 
 const PRODUCT_ARRAY_KEYS = ["products", "results", "items", "data", "records", "organic", "shopping_results"];
-const PRICE_KEYS = ["price", "price_usd", "currentPrice", "current_price", "final_price", "initial_price", "sale_price", "value"];
+const PRICE_KEYS = ["final_price", "buybox_final_price", "sale_price", "price", "price_usd", "currentPrice", "current_price", "initial_price", "value"];
 const TITLE_KEYS = ["title", "name", "product_title", "productName", "product_name", "item_title"];
 const URL_KEYS = ["url", "link", "product_url", "sourceUrl"];
 const RATING_KEYS = ["rating", "stars", "average_rating"];
-const REVIEWS_KEYS = ["reviews", "reviewsCount", "reviews_count", "ratings_count", "num_ratings", "review_count"];
+const REVIEWS_KEYS = ["reviews_count", "num_ratings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -47,6 +47,187 @@ function findNumber(record: Record<string, unknown>, keys: string[]) {
   }
 
   return undefined;
+}
+
+function findNestedRecord(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function findProductDetailString(record: Record<string, unknown>, parentKeys: string[], childKey: string) {
+  for (const parentKey of parentKeys) {
+    const parent = findNestedRecord(record, parentKey);
+    const candidate = parent?.[childKey];
+
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function parseNumberFromText(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const multiplier = /\bk\b/i.test(value) ? 1000 : /\bm\b/i.test(value) ? 1_000_000 : 1;
+  const match = value.replace(/,/g, "").match(/-?\d+(\.\d+)?/);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed * multiplier : undefined;
+}
+
+function resolvePrice(record: Record<string, unknown>) {
+  const buyboxPrices = findNestedRecord(record, "buybox_prices");
+  const direct =
+    findNumber(record, ["final_price"]) ??
+    (buyboxPrices ? findNumber(buyboxPrices, ["final_price"]) : undefined) ??
+    findNumber(record, ["sale_price"]) ??
+    parseNumberFromText(record.price) ??
+    findNumber(record, ["initial_price"]);
+
+  return direct;
+}
+
+function resolveReviews(record: Record<string, unknown>) {
+  return (
+    findNumber(record, REVIEWS_KEYS) ??
+    parseNumberFromText(findProductDetailString(record, ["product_details"], "Customer Reviews")) ??
+    undefined
+  );
+}
+
+function resolveSalesSignal(record: Record<string, unknown>) {
+  return findNumber(record, ["bought_past_month", "sold"]) ?? parseNumberFromText(record.sold_count);
+}
+
+function resolveAvailability(record: Record<string, unknown>, price: number | undefined) {
+  if (record.is_available === true) {
+    return "in_stock";
+  }
+
+  if (record.is_available === false) {
+    return "unavailable";
+  }
+
+  const rawAvailability = findString(record, ["availability", "stockStatus", "stock_status"]);
+  const lowerAvailability = rawAvailability?.toLowerCase() ?? "";
+  const availableCount = findNumber(record, ["available_count"]);
+
+  if (lowerAvailability.includes("in stock")) {
+    return "in_stock";
+  }
+
+  if (lowerAvailability.includes("currently unavailable") || lowerAvailability.includes("out of stock")) {
+    return "unavailable";
+  }
+
+  if (availableCount !== undefined && availableCount > 0) {
+    return "in_stock";
+  }
+
+  if (rawAvailability?.toLowerCase().includes("limited")) {
+    return "limited";
+  }
+
+  if (findString(record, ["delivery", "deliveryEstimate", "shipping_time"]) && price !== undefined) {
+    return "likely_available";
+  }
+
+  return "unknown";
+}
+
+function parseDays(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const lower = value.toLowerCase();
+  const range = lower.match(/(\d+)\s*[-–]\s*(\d+)\s*day/);
+
+  if (range) {
+    return Number(range[2]);
+  }
+
+  const single = lower.match(/(\d+)\s*day/);
+
+  if (single) {
+    return Number(single[1]);
+  }
+
+  return undefined;
+}
+
+function resolveDeliveryDays(record: Record<string, unknown>) {
+  return (
+    parseDays(record.delivery) ??
+    parseDays(record.availability_date) ??
+    parseDays(record.ships_to) ??
+    parseDays(record.deliveryEstimate) ??
+    parseDays(record.shipping_time)
+  );
+}
+
+function inferBrandFromTitle(title: string) {
+  const firstToken = title.split(/\s+/).find((part) => /^[A-Z][A-Za-z0-9-]{2,}$/.test(part));
+  return firstToken;
+}
+
+function resolveBrand(record: Record<string, unknown>, title: string) {
+  const nestedBrand =
+    findProductDetailString(record, ["product_details"], "Brand") ??
+    findProductDetailString(record, ["product_specifications"], "Brand");
+  const direct = findString(record, ["brand", "manufacturer"]) ?? nestedBrand;
+
+  if (direct) {
+    return { brand: direct, brandConfidence: "high" as const };
+  }
+
+  const inferred = inferBrandFromTitle(title);
+
+  if (inferred) {
+    return { brand: inferred, brandConfidence: "low" as const };
+  }
+
+  return { brand: "Unknown", brandConfidence: "unknown" as const };
+}
+
+function resolveCategoryPath(record: Record<string, unknown>, context: MarketContextPayload) {
+  const directCategories = record.categories;
+
+  if (Array.isArray(directCategories)) {
+    return directCategories.map((item) => (typeof item === "string" ? item : JSON.stringify(item))).filter(Boolean);
+  }
+
+  for (const key of ["categories_with_urls", "category_tree", "breadcrumbs"]) {
+    const value = record[key];
+
+    if (Array.isArray(value)) {
+      const names = value
+        .map((item) => {
+          const nested = asRecord(item);
+          return nested ? findString(nested, ["category_name", "name"]) : typeof item === "string" ? item : undefined;
+        })
+        .filter((item): item is string => Boolean(item));
+
+      if (names.length) {
+        return names;
+      }
+    }
+  }
+
+  const keyword = findString(record, ["keyword"]) ?? context.category;
+  return keyword ? [keyword] : ["unknown"];
 }
 
 function flattenCandidateArrays(value: unknown): Record<string, unknown>[] {
@@ -134,31 +315,49 @@ function normalizeRecord(
 ): NormalizedProduct {
   const { context, product, collectedAt } = payloadContext;
   const title = findString(record, TITLE_KEYS) ?? `${context.productName} ${index + 1}`;
-  const price = findNumber(record, PRICE_KEYS);
+  const price = resolvePrice(record) ?? findNumber(record, PRICE_KEYS);
   const rating = findNumber(record, RATING_KEYS);
-  const reviewsCount = findNumber(record, REVIEWS_KEYS);
+  const reviewsCount = resolveReviews(record);
+  const salesSignal = resolveSalesSignal(record);
   const supplierPrice = findNumber(record, ["supplierPrice", "supplier_price", "unit_cost", "cost"]);
   const estimatedSupplierPrice = supplierPrice ?? (price ? Number((price * 0.58).toFixed(2)) : undefined);
   const estimatedMargin =
     price && estimatedSupplierPrice ? Number((((price - estimatedSupplierPrice) / price) * 100).toFixed(1)) : undefined;
-  const demandSignal = signalFromText(`${title} ${evidenceRef.snippet ?? ""}`, reviewsCount ? clamp(42 + reviewsCount / 25) : 56);
-  const pricePressure = price ? clamp(price < 25 ? 70 : price < 40 ? 58 : 44) : 52;
+  const demandFallback = salesSignal ? clamp(45 + salesSignal / 100) : reviewsCount ? clamp(42 + reviewsCount / 25) : 56;
+  const demandSignal = signalFromText(`${title} ${evidenceRef.snippet ?? ""}`, demandFallback);
+  const pricePressure = price ? clamp(price < 25 ? 70 : price < 40 ? 58 : 44) : undefined;
   const trendMomentum = clamp((demandSignal + (rating ? rating * 14 : 56)) / 2);
   const inventoryRisk = clamp(100 - (estimatedMargin ?? 38));
+  const availability = resolveAvailability(record, price);
+  const estimatedDeliveryDays = resolveDeliveryDays(record) ?? null;
+  const { brand, brandConfidence } = resolveBrand(record, title);
+  const categoryPath = resolveCategoryPath(record, context);
+  const missingFields = [
+    price === undefined ? "price" : "",
+    reviewsCount === undefined ? "reviewsCount" : "",
+    salesSignal === undefined ? "salesSignal" : "",
+    estimatedDeliveryDays === null ? "estimatedDeliveryDays" : ""
+  ].filter(Boolean);
 
   return NormalizedProductSchema.parse({
     source: product,
     externalId: findString(record, ["asin", "sku", "id", "product_id"]) ?? `${product.toLowerCase().replace(/\s+/g, "_")}_${index + 1}`,
     title,
     canonicalTitle: canonicalize(title),
-    category: findString(record, ["category", "department"]) ?? context.category,
+    brand,
+    brandConfidence,
+    category: findString(record, ["category", "department"]) ?? categoryPath[0] ?? context.category,
+    categoryPath,
     price,
+    priceDataStatus: price === undefined ? "missing" : "available",
     currency: context.currency,
     priceUsd: context.currency === "USD" ? price : price,
     originalPriceUsd: findNumber(record, ["originalPrice", "original_price", "list_price"]),
     rating,
     reviewsCount: reviewsCount ? Math.round(reviewsCount) : undefined,
-    availability: findString(record, ["availability", "stockStatus", "stock_status"]) ?? "unknown",
+    salesSignal,
+    availability,
+    estimatedDeliveryDays,
     imageUrl: findString(record, ["image", "imageUrl", "image_url", "thumbnail", "main_image"]),
     supplierName: findString(record, ["supplier", "seller", "merchant", "seller_name", "shop_name"]) ?? context.supplierSource,
     supplierPrice: estimatedSupplierPrice,
@@ -170,10 +369,15 @@ function normalizeRecord(
     trendMomentum,
     inventoryRisk,
     estimatedMargin,
-    riskScore: clamp((pricePressure + inventoryRisk) / 2),
+    riskScore: clamp(((pricePressure ?? 50) + inventoryRisk) / 2),
     confidence: rating && reviewsCount ? 0.82 : 0.66,
     lastUpdated: collectedAt,
-    evidenceRefs: [evidenceRef.id]
+    evidenceRefs: [evidenceRef.id],
+    dataQuality: {
+      missingFields,
+      fallbackFields: price === undefined ? ["price_missing_no_margin_roi"] : [],
+      sourceStatus: missingFields.length ? "partial" : "success"
+    }
   });
 }
 
@@ -220,14 +424,20 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
         externalId: `demo_${index + 1}`,
         title: index === 0 ? context.productName : `${context.productName} variant ${index + 1}`,
         canonicalTitle: canonicalize(index === 0 ? context.productName : `${context.productName} variant ${index + 1}`),
+        brand: "Unknown",
+        brandConfidence: "unknown",
         category: context.category,
+        categoryPath: [context.category],
         price,
+        priceDataStatus: "available",
         currency: context.currency,
         priceUsd: price,
         originalPriceUsd: Number((price * 1.12).toFixed(2)),
         rating: Number((4.6 - index * 0.08).toFixed(1)),
         reviewsCount: 420 - index * 55,
+        salesSignal: 250 - index * 20,
         availability: index === 4 ? "limited" : "in_stock",
+        estimatedDeliveryDays: index > 2 ? 21 : 12,
         supplierName: context.supplierSource,
         supplierPrice,
         estimatedDeliveryTime: index > 2 ? "14-21 days" : "8-12 days",
@@ -241,7 +451,12 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
         riskScore: clamp((pricePressure + inventoryRisk) / 2),
         confidence: index > 2 ? 0.62 : 0.78,
         lastUpdated: collectedAt,
-        evidenceRefs: [evidence.id]
+        evidenceRefs: [evidence.id],
+        dataQuality: {
+          missingFields: [],
+          fallbackFields: ["deterministic_demo_seed"],
+          sourceStatus: "partial"
+        }
       })
     };
   });

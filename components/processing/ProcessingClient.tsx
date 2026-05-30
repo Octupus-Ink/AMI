@@ -22,12 +22,11 @@ const PREPARING_REDIRECT_DELAY_MS = 650;
 
 function assistantSeedActivity(id: AssistantId) {
   const copy: Record<AssistantId, string> = {
+    orchestrator: "Waiting to build the goal-specific strategy and resolve final decision rules.",
+    inventory: "Waiting to evaluate stock posture, cannibalization, restock need, and operational context.",
     trend: "Waiting to review demand and trend momentum.",
     competitor: "Waiting to compare pricing, availability, and market pressure.",
-    supplier: "Waiting to compare supplier cost, delivery, and sourcing risk.",
-    inventory: "Waiting to evaluate stock posture and operational context.",
-    coordinator: "Waiting to compare agent agreements, conflicts, and confidence gaps.",
-    strategy: "Waiting to produce final AMI verdict and next action."
+    supplier: "Waiting to compare supplier cost, delivery, availability, and sourcing risk."
   };
 
   return copy[id];
@@ -35,12 +34,11 @@ function assistantSeedActivity(id: AssistantId) {
 
 function assistantSourceType(id: AssistantId) {
   const copy: Record<AssistantId, string> = {
+    orchestrator: "Goal strategy and decision resolution",
+    inventory: "Inventory and operational context",
     trend: "Demand and trend KPIs",
     competitor: "Marketplace comparison",
-    supplier: "Supplier evidence",
-    inventory: "Inventory context",
-    coordinator: "Cross-agent synthesis",
-    strategy: "Final verdict"
+    supplier: "Supplier evidence"
   };
 
   return copy[id];
@@ -73,6 +71,14 @@ function formatMode(mode: SourceMode | string) {
     return "Live Bright Data data";
   }
 
+  if (mode === "demo") {
+    return "Demo";
+  }
+
+  if (mode === "fallback") {
+    return "Fallback";
+  }
+
   if (mode === "fallback_snapshot") {
     return "Fallback snapshot";
   }
@@ -86,7 +92,7 @@ function formatMode(mode: SourceMode | string) {
   }
 
   if (mode === "mixed") {
-    return "Fallback snapshot";
+    return "Mixed live + fallback";
   }
 
   if (mode === "error" || mode === "not_configured") {
@@ -441,6 +447,13 @@ export function ProcessingClient() {
     router.push("/market-context-setup");
   }
 
+  const displayAssistants = latestResult?.agentStatus?.length
+    ? [...latestResult.agentStatus]
+        .sort((a, b) => (a.executionOrder ?? 99) - (b.executionOrder ?? 99))
+        .map((row) => VisibleAssistants.find((assistant) => assistant.id === row.agentType))
+        .filter((assistant): assistant is (typeof VisibleAssistants)[number] => Boolean(assistant))
+    : VisibleAssistants;
+
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="mb-4 flex justify-end">
@@ -512,8 +525,9 @@ export function ProcessingClient() {
         )}
 
         <div className="mt-5 flex flex-col gap-3">
-          {VisibleAssistants.map((assistant) => {
+          {displayAssistants.map((assistant) => {
             const state = assistantStates[assistant.id];
+            const statusRow = latestResult?.agentStatus?.find((row) => row.agentType === assistant.id);
 
             return (
               <div key={assistant.id} className="flex flex-col gap-3 border-b border-slate-200 py-4 last:border-b-0 sm:flex-row sm:items-start">
@@ -530,7 +544,13 @@ export function ProcessingClient() {
                   <div>
                     <p className="font-semibold text-slate-950">{assistant.name}</p>
                     <p className="mt-1 text-sm leading-6 text-slate-600">{assistant.role}</p>
+                    {statusRow?.goalIntent && <p className="mt-2 text-sm leading-6 text-slate-700">{statusRow.goalIntent}</p>}
                     <p className="mt-2 text-sm leading-6 text-slate-700">{activity[assistant.id]}</p>
+                    {(statusRow?.fallbackSignals?.length || statusRow?.missingSignals?.length) ? (
+                      <p className="mt-2 text-xs font-semibold uppercase text-amber-700">
+                        {[...(statusRow.fallbackSignals ?? []), ...(statusRow.missingSignals ?? [])].join(", ")}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex min-w-48 flex-wrap items-center gap-3 sm:justify-end">
