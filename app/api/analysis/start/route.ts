@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { NextRequest, NextResponse } from "next/server";
 import { completeAnalysisRun, createAnalysisRunToMetrics, INVENTORY_CONTEXT_UNAVAILABLE_WARNING } from "@/lib/ami/analysis";
 import { amiDiagLog, briefingDiagFields, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
@@ -58,7 +59,11 @@ function continueAgentCompletion(metricsReady: AnalysisResult) {
     return;
   }
 
-  void (async () => {
+  // `after` keeps the Vercel serverless function alive until this callback
+  // resolves, even after the HTTP response has been sent. Without it, Vercel
+  // terminates the execution context at response time, leaving the run stuck
+  // at "metrics_ready" and causing infinite frontend polling.
+  after(async () => {
     try {
       await saveAnalysisResult({
         ...metricsReady,
@@ -96,7 +101,7 @@ function continueAgentCompletion(metricsReady: AnalysisResult) {
         warnings: [...metricsReady.warnings, message]
       });
     }
-  })();
+  });
 }
 
 export async function POST(request: NextRequest) {

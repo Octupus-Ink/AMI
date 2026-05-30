@@ -428,6 +428,16 @@ export function ProcessingClient() {
             return;
           }
 
+          amiDiagLog("processing_run_status", {
+            requestId: effectRequestId,
+            analysisRunId,
+            route: `/api/analysis/${analysisRunId}`,
+            runStatus: result.status,
+            sourceMode: result.sourceMode,
+            dataQualityStatus: result.dataQualitySummary?.status,
+            pollCount
+          });
+
           applyAnalysisState(result);
           window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
 
