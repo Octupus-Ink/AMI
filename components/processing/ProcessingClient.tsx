@@ -6,6 +6,7 @@ import { ArrowLeft, CheckCircle2, CircleDashed, DatabaseZap, Radar, ShieldAlert 
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
+import { amiDiagLog, briefingDiagFields, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
 import {
   MarketContextPayloadSchema,
   VisibleAssistants,
@@ -62,13 +63,26 @@ const processingMessages = [
   "Preparing AMI Strategy"
 ];
 
+type StartRequestEntry = {
+  requestId: string;
+  startedAt: string;
+  controller: AbortController;
+  promise: Promise<AnalysisResult>;
+};
+
+const startRequestCache = new Map<string, StartRequestEntry>();
+
+function analysisLockKey(fingerprint: string) {
+  return `ami.analysis.inFlight.${fingerprint}`;
+}
+
 function formatMode(mode: SourceMode | string) {
   if (mode === "pending") {
     return "Pending";
   }
 
   if (mode === "live") {
-    return "Live Bright Data data";
+    return "Live Bright Data sources";
   }
 
   if (mode === "demo") {
@@ -165,6 +179,7 @@ function safeStatusMessage(value: string) {
 export function ProcessingClient() {
   const router = useRouter();
   const abortRef = useRef<AbortController | null>(null);
+  const activeFingerprintRef = useRef<string | null>(null);
   const [progress, setProgress] = useState(12);
   const [assistantStates, setAssistantStates] = useState(initialStates);
   const [activity, setActivity] = useState(latestActivity);
@@ -176,21 +191,43 @@ export function ProcessingClient() {
 
   useEffect(() => {
     let isActive = true;
+    let pollCount = 0;
     const controller = new AbortController();
     const timers: number[] = [];
     const orchestrationStartedAt = Date.now();
+    const effectRequestId = createDiagRequestId("processing_effect");
+    const effectStartedAt = new Date().toISOString();
     abortRef.current = controller;
+    amiDiagLog("processing_effect_start", {
+      requestId: effectRequestId,
+      route: "/processing",
+      startedAt: effectStartedAt
+    });
 
     const stored = window.localStorage.getItem("ami.marketContext");
 
     if (!stored) {
+      amiDiagLog("processing_context_missing", {
+        requestId: effectRequestId,
+        route: "/processing"
+      });
       window.localStorage.setItem("ami.briefingError", "AMI briefing context was missing. Review the briefing and start again.");
       router.push("/market-context-setup");
       return () => {
+        amiDiagLog("processing_cleanup_called", {
+          requestId: effectRequestId,
+          route: "/processing",
+          abortReason: "missing_context_cleanup"
+        });
         isActive = false;
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
+        amiDiagLog("processing_cleanup_abort_called", {
+          requestId: effectRequestId,
+          route: "/processing",
+          abortReason: "missing_context_cleanup"
+        });
         controller.abort();
       };
     }
@@ -206,18 +243,43 @@ export function ProcessingClient() {
 
       context = parsedContext.data;
     } catch {
+      amiDiagLog("processing_context_invalid", {
+        requestId: effectRequestId,
+        route: "/processing"
+      });
       window.localStorage.removeItem("ami.marketContext");
       window.localStorage.setItem("ami.briefingError", "AMI briefing context was invalid. Review the briefing and start again.");
       router.push("/market-context-setup");
       return () => {
+        amiDiagLog("processing_cleanup_called", {
+          requestId: effectRequestId,
+          route: "/processing",
+          abortReason: "invalid_context_cleanup"
+        });
         isActive = false;
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
+        amiDiagLog("processing_cleanup_abort_called", {
+          requestId: effectRequestId,
+          route: "/processing",
+          abortReason: "invalid_context_cleanup"
+        });
         controller.abort();
       };
     }
 
+    const diagContext = briefingDiagFields(context);
+    const lockKey = analysisLockKey(diagContext.briefingFingerprint);
+    activeFingerprintRef.current = diagContext.briefingFingerprint;
+    const existingLock = window.sessionStorage.getItem(lockKey);
+
+    amiDiagLog("processing_context_loaded", {
+      requestId: effectRequestId,
+      route: "/processing",
+      ...diagContext,
+      isDuplicateStart: Boolean(existingLock)
+    });
     logProcessing("context loaded", {
       businessGoal: context.businessGoal,
       useInventoryContext: context.useInventoryContext
@@ -298,14 +360,33 @@ export function ProcessingClient() {
     function redirectWhenReady(result: AnalysisResult) {
       setIsPreparingStrategy(true);
       window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
+      window.sessionStorage.removeItem(lockKey);
+      startRequestCache.delete(diagContext.briefingFingerprint);
+      amiDiagLog("processing_latest_analysis_write", {
+        requestId: effectRequestId,
+        analysisRunId: result.analysisRunId,
+        route: "/processing",
+        ...diagContext
+      });
       const visibleForMs = Date.now() - orchestrationStartedAt;
       const redirectDelayMs =
         visibleForMs >= MIN_ORCHESTRATION_VISIBLE_MS
           ? PREPARING_REDIRECT_DELAY_MS
           : MIN_ORCHESTRATION_VISIBLE_MS - visibleForMs;
+      amiDiagLog("processing_redirect_scheduled", {
+        requestId: effectRequestId,
+        analysisRunId: result.analysisRunId,
+        route: "/processing",
+        durationMs: Math.round(visibleForMs)
+      });
       timers.push(
         window.setTimeout(() => {
           if (isActive) {
+            amiDiagLog("processing_redirect_executed", {
+              requestId: effectRequestId,
+              analysisRunId: result.analysisRunId,
+              route: `/recommendations?runId=${result.analysisRunId}`
+            });
             router.push(`/recommendations?runId=${result.analysisRunId}`);
           }
         }, redirectDelayMs)
@@ -313,13 +394,28 @@ export function ProcessingClient() {
     }
 
     async function pollAnalysis(analysisRunId: string) {
+      amiDiagLog("processing_polling_started", {
+        requestId: effectRequestId,
+        analysisRunId,
+        route: "/processing",
+        pollCount
+      });
       const pollTimer = window.setTimeout(async () => {
         if (!isActive) {
           return;
         }
 
         try {
+          pollCount += 1;
           const response = await fetch(`/api/analysis/${analysisRunId}`, { signal: controller.signal });
+          amiDiagLog("processing_polling_response", {
+            requestId: effectRequestId,
+            analysisRunId,
+            route: `/api/analysis/${analysisRunId}`,
+            responseStatus: response.status,
+            ok: response.ok,
+            pollCount
+          });
 
           if (!response.ok) {
             throw new Error("AMI could not retrieve the latest analysis status.");
@@ -335,6 +431,13 @@ export function ProcessingClient() {
           window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
 
           if (isTerminal(result)) {
+            amiDiagLog("processing_terminal_status_detected", {
+              requestId: effectRequestId,
+              analysisRunId,
+              runStatus: result.status,
+              sourceMode: result.sourceMode,
+              usedFallback: result.fallbackUsed
+            });
             redirectWhenReady(result);
             return;
           }
@@ -355,46 +458,89 @@ export function ProcessingClient() {
     }
 
     async function startAnalysis() {
-      try {
-        logProcessing("starting analysis");
-        const response = await fetch("/api/analysis/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(context),
-          signal: controller.signal
+      const cachedEntry = startRequestCache.get(diagContext.briefingFingerprint);
+      const startRequestId = cachedEntry?.requestId ?? createDiagRequestId("analysis_start");
+      const startedAt = cachedEntry?.startedAt ?? new Date().toISOString();
+      const duplicateLock = window.sessionStorage.getItem(lockKey);
+      const isDuplicateStart = Boolean(cachedEntry || duplicateLock);
+
+      let entry = cachedEntry;
+
+      if (!entry) {
+        const startController = new AbortController();
+        amiDiagLog("processing_fetch_started", {
+          requestId: startRequestId,
+          route: "/api/analysis/start",
+          startedAt,
+          ...diagContext,
+          isDuplicateStart
         });
+        const startPromise = fetch("/api/analysis/start", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-ami-request-id": startRequestId,
+            "x-ami-briefing-fingerprint": diagContext.briefingFingerprint
+          },
+          body: JSON.stringify(context),
+          signal: startController.signal
+        }).then(async (response) => {
+          logProcessing("analysis response status", { status: response.status, ok: response.ok });
+          amiDiagLog("processing_fetch_response", {
+            requestId: startRequestId,
+            route: "/api/analysis/start",
+            responseStatus: response.status,
+            ok: response.ok,
+            durationMs: Date.now() - new Date(startedAt).getTime()
+          });
 
-        if (!isActive) {
-          return;
-        }
-
-        logProcessing("analysis response status", { status: response.status, ok: response.ok });
-
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({ error: "" }));
-          const errorMessage = payload.error || "AMI could not complete this analysis. Return to Briefing and validate the context.";
-
-          if (!isActive) {
-            return;
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({ error: "" }));
+            throw new Error(payload.error || "AMI could not complete this analysis. Return to Briefing and validate the context.");
           }
 
-          timers.forEach((timer) => window.clearTimeout(timer));
-          timers.length = 0;
-          setProgress(100);
-          setAssistantStates(failedStartStates(errorMessage));
-          setActivity((current) => ({
-            ...current,
-            inventory: errorMessage.toLowerCase().includes("inventory")
-              ? "Inventory is required for this business goal before AMI can continue."
-              : "AMI stopped before inventory context could be resolved."
-          }));
-          setSourceStatus("Analysis stopped");
-          setMessage(errorMessage);
-          logProcessing("analysis failed", { status: response.status, reason: errorMessage });
-          return;
+          return (await response.json()) as AnalysisResult;
+        });
+
+        entry = {
+          requestId: startRequestId,
+          startedAt,
+          controller: startController,
+          promise: startPromise
+        };
+        startRequestCache.set(diagContext.briefingFingerprint, entry);
+        window.sessionStorage.setItem(lockKey, JSON.stringify({
+          requestId: startRequestId,
+          startedAt
+        }));
+      }
+
+      try {
+        amiDiagLog("processing_start_analysis_called", {
+          requestId: startRequestId,
+          route: "/processing",
+          startedAt,
+          ...diagContext,
+          isDuplicateStart
+        });
+        logProcessing("starting analysis");
+
+        if (cachedEntry) {
+          amiDiagLog("processing_duplicate_start_blocked", {
+            requestId: startRequestId,
+            route: "/processing",
+            ...diagContext,
+            isDuplicateStart: true
+          });
+          amiDiagLog("processing_start_cache_reused", {
+            requestId: startRequestId,
+            route: "/processing",
+            ...diagContext,
+            isDuplicateStart: true
+          });
         }
 
-        const result = (await response.json()) as AnalysisResult;
+        const result = await entry.promise;
 
         if (!isActive) {
           return;
@@ -404,6 +550,20 @@ export function ProcessingClient() {
         timers.length = 0;
         applyAnalysisState(result);
         window.localStorage.setItem("ami.latestAnalysis", JSON.stringify(result));
+        window.sessionStorage.setItem(lockKey, JSON.stringify({
+          requestId: startRequestId,
+          analysisRunId: result.analysisRunId,
+          startedAt,
+          completedAt: new Date().toISOString()
+        }));
+        amiDiagLog("processing_current_analysis_run", {
+          requestId: startRequestId,
+          analysisRunId: result.analysisRunId,
+          runStatus: result.status,
+          sourceMode: result.sourceMode,
+          usedFallback: result.fallbackUsed,
+          dataQualityStatus: result.dataQualitySummary?.status
+        });
 
         if (isTerminal(result)) {
           redirectWhenReady(result);
@@ -414,11 +574,22 @@ export function ProcessingClient() {
       } catch (error) {
         const isAbortError = error instanceof DOMException && error.name === "AbortError";
 
-        if (!isActive || (controller.signal.aborted && isAbortError)) {
+        if (isAbortError || entry.controller.signal.aborted) {
+          amiDiagLog("processing_fetch_aborted", {
+            requestId: startRequestId,
+            route: "/api/analysis/start",
+            abortReason: entry.controller.signal.aborted ? "controller_abort" : "abort_error",
+            durationMs: Date.now() - new Date(startedAt).getTime()
+          });
+        }
+
+        if (!isActive || (entry.controller.signal.aborted && isAbortError)) {
           return;
         }
 
         const errorMessage = error instanceof Error ? error.message : "AMI could not complete this analysis.";
+        window.sessionStorage.removeItem(lockKey);
+        startRequestCache.delete(diagContext.briefingFingerprint);
         timers.forEach((timer) => window.clearTimeout(timer));
         timers.length = 0;
         setProgress(100);
@@ -426,22 +597,49 @@ export function ProcessingClient() {
         setSourceStatus("Analysis failed");
         setMessage(safeStatusMessage(errorMessage));
         logProcessing("analysis failed", { reason: errorMessage });
+        amiDiagLog("processing_start_failed", {
+          requestId: startRequestId,
+          route: "/api/analysis/start",
+          errorMessage
+        });
       }
     }
 
     startAnalysis();
 
     return () => {
+      amiDiagLog("processing_cleanup_called", {
+        requestId: effectRequestId,
+        route: "/processing",
+        abortReason: "effect_cleanup"
+      });
       isActive = false;
       timers.forEach((timer) => window.clearTimeout(timer));
       if (abortRef.current === controller) {
         abortRef.current = null;
       }
+      amiDiagLog("processing_cleanup_abort_called", {
+        requestId: effectRequestId,
+        route: "/processing",
+        abortReason: "effect_cleanup"
+      });
       controller.abort();
     };
   }, [router]);
 
   function cancelAnalysis() {
+    const fingerprint = activeFingerprintRef.current;
+
+    amiDiagLog("processing_cancel_clicked", {
+      requestId: createDiagRequestId("processing_cancel"),
+      route: "/processing",
+      abortReason: "user_cancel"
+    });
+    if (fingerprint) {
+      startRequestCache.get(fingerprint)?.controller.abort();
+      startRequestCache.delete(fingerprint);
+      window.sessionStorage.removeItem(analysisLockKey(fingerprint));
+    }
     abortRef.current?.abort();
     window.localStorage.removeItem("ami.latestAnalysis");
     router.push("/market-context-setup");

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentOutput, RiskLevel, VerdictAgentOutput } from "@/lib/schemas/agents";
+import type { AgentOutput, EvidenceRef, RiskLevel, VerdictAgentOutput } from "@/lib/schemas/agents";
 import type {
   AnalysisResult,
   AnalysisRunContract,
@@ -9,6 +9,7 @@ import type {
   CanonicalSourceMode,
   DataQuality,
   CoordinatorRunTrace,
+  EvidenceLink,
   EvidencePackage,
   EvidenceTraceMetadata,
   MarketContextPayload,
@@ -31,7 +32,8 @@ import {
 import { buildGraphData } from "@/lib/analysis/graph-data";
 import { extractPreliminaryMetrics } from "@/lib/analysis/kpi-extraction";
 import { buildEvidencePackages } from "@/lib/analysis/evidence";
-import { normalizeVisibleEvidenceItems, resolveSourceState } from "@/lib/analysis/source-state";
+import { normalizeVisibleEvidenceItems, resolveSourceState, toHttpSourceUrl } from "@/lib/analysis/source-state";
+import { amiDiagLog, briefingDiagFields, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
 import {
   amiLog,
   extractedProductFields,
@@ -54,6 +56,11 @@ export type InventoryRunContext = {
   available: boolean;
   warningMessage?: string;
   sourceLabel?: string;
+};
+
+type AnalysisDiagnostics = {
+  requestId?: string;
+  briefingFingerprint?: string;
 };
 
 const SPECIALIST_ASSISTANTS = ["inventory", "trend", "competitor", "supplier"] as const;
@@ -123,6 +130,200 @@ function rawRefForCollection(collection: BrightDataCollectionResult) {
   return collection.rawSnapshotRefs[0] ?? (collection.rawSnapshotsSaved > 0 ? "mongo:rawSourceSnapshots" : undefined);
 }
 
+function firstHttpUrl(...values: unknown[]) {
+  for (const value of values) {
+    const url = toHttpSourceUrl(value);
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
+function evidenceLinkSourceType(sourceName: string | undefined, fallback: EvidenceLink["sourceType"]): EvidenceLink["sourceType"] {
+  const normalized = sourceName?.toLowerCase() ?? "";
+
+  if (normalized.includes("supplier") || normalized.includes("alibaba") || normalized.includes("aliexpress")) {
+    return "supplier";
+  }
+
+  if (normalized.includes("trend") || normalized.includes("tiktok") || normalized.includes("facebook")) {
+    return "trend";
+  }
+
+  if (normalized.includes("search") || normalized.includes("unlocker") || normalized.includes("serp")) {
+    return "search";
+  }
+
+  return fallback;
+}
+
+function buildEvidenceLinks(
+  evidencePackage: EvidencePackage,
+  products: NormalizedProduct[],
+  evidenceRefs: EvidenceRef[]
+): EvidenceLink[] {
+  const links: EvidenceLink[] = [];
+  const seen = new Set<string>();
+  const rawSourceSnapshotId = evidencePackage.rawSourceSnapshotId ?? evidencePackage.rawRef;
+
+  function addLink(input: {
+    label: string;
+    url?: string | null;
+    sourceName?: string;
+    sourceType: EvidenceLink["sourceType"];
+    sourceStatus?: EvidenceLink["sourceStatus"];
+    lastSeenAt?: string;
+    rawSourceSnapshotId?: string;
+  }) {
+    const url = toHttpSourceUrl(input.url);
+
+    if (!url || seen.has(url)) {
+      return;
+    }
+
+    seen.add(url);
+    links.push({
+      label: input.label,
+      url,
+      sourceName: input.sourceName ?? evidencePackage.sourceName ?? evidencePackage.sourceMarketplace,
+      sourceType: input.sourceType,
+      sourceStatus: input.sourceStatus,
+      lastSeenAt: input.lastSeenAt ?? evidencePackage.lastSeenAt ?? evidencePackage.scrapedAt,
+      rawSourceSnapshotId: input.rawSourceSnapshotId ?? rawSourceSnapshotId
+    });
+  }
+
+  const evidencePackageUrl = firstHttpUrl(
+    evidencePackage.productUrl,
+    evidencePackage.marketplaceUrl,
+    evidencePackage.sourceUrl,
+    evidencePackage.url
+  );
+
+  addLink({
+    label: evidenceLinkSourceType(evidencePackage.sourceName, "marketplace") === "search" ? "Open marketplace search" : "Review listing",
+    url: evidencePackageUrl,
+    sourceName: evidencePackage.sourceName ?? evidencePackage.sourceMarketplace,
+    sourceType: evidenceLinkSourceType(evidencePackage.sourceName, "marketplace"),
+    sourceStatus: evidencePackage.sourceStatus,
+    lastSeenAt: evidencePackage.lastSeenAt ?? evidencePackage.scrapedAt,
+    rawSourceSnapshotId
+  });
+
+  addLink({
+    label: "View supplier source",
+    url: evidencePackage.supplierUrl,
+    sourceName: evidencePackage.sellerName ?? evidencePackage.sourceName ?? evidencePackage.sourceMarketplace,
+    sourceType: "supplier",
+    sourceStatus: evidencePackage.sourceStatus,
+    lastSeenAt: evidencePackage.lastSeenAt ?? evidencePackage.scrapedAt,
+    rawSourceSnapshotId
+  });
+
+  products.slice(0, 5).forEach((product) => {
+    const productUrl = firstHttpUrl(product.productUrl, product.marketplaceUrl, product.sourceUrl);
+
+    addLink({
+      label: "View marketplace listing",
+      url: productUrl,
+      sourceName: product.source,
+      sourceType: evidenceLinkSourceType(product.source, "marketplace"),
+      sourceStatus: product.dataQuality?.sourceStatus,
+      lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
+      rawSourceSnapshotId: product.rawSourceSnapshotId ?? rawSourceSnapshotId
+    });
+
+    addLink({
+      label: "View supplier source",
+      url: product.supplierUrl,
+      sourceName: product.supplierName ?? product.source,
+      sourceType: "supplier",
+      sourceStatus: product.dataQuality?.sourceStatus,
+      lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
+      rawSourceSnapshotId: product.rawSourceSnapshotId ?? rawSourceSnapshotId
+    });
+  });
+
+  evidenceRefs.slice(0, 10).forEach((ref) => {
+    addLink({
+      label: "Open evidence",
+      url: ref.url,
+      sourceName: ref.sourceType || ref.source,
+      sourceType: evidenceLinkSourceType(ref.sourceType, "search"),
+      sourceStatus: undefined,
+      lastSeenAt: ref.collectedAt,
+      rawSourceSnapshotId
+    });
+  });
+
+  return links;
+}
+
+function rawStatusFromDataQuality(dataQuality: DataQuality): RawSourceStatus {
+  if (dataQuality.status === "failed") {
+    return "failed";
+  }
+
+  if (dataQuality.status === "success") {
+    return "success";
+  }
+
+  return "partial";
+}
+
+function sourceCollectionEventFor(status: RawSourceStatus) {
+  if (status === "success") {
+    return "source_collection_completed";
+  }
+
+  if (status === "partial") {
+    return "source_collection_partial";
+  }
+
+  if (status === "empty") {
+    return "source_collection_empty";
+  }
+
+  return "source_collection_failed";
+}
+
+function logSourceRoleCollection(details: {
+  requestId: string;
+  analysisRunId: string;
+  context: MarketContextPayload;
+  briefingFingerprint: string;
+  sourceName: string;
+  sourceRole: "marketplace_demand" | "trend_signal" | "supplier_feasibility" | "inventory_context" | "orchestrator_synthesis";
+  sourceStatus: RawSourceStatus;
+  recordCount: number;
+  usedFallback: boolean;
+  fallbackReason?: string;
+  missingCriticalFields?: string[];
+}) {
+  amiDiagLog(sourceCollectionEventFor(details.sourceStatus), {
+    requestId: details.requestId,
+    analysisRunId: details.analysisRunId,
+    briefingFingerprint: details.briefingFingerprint,
+    businessGoal: details.context.businessGoal,
+    productFamily: details.context.productName,
+    requestedProductFamily: details.context.productName,
+    category: details.context.category,
+    requestedCategory: details.context.category,
+    targetMarketplace: details.context.targetMarketplace,
+    sourceName: details.sourceName,
+    sourceRole: details.sourceRole,
+    sourceStatus: details.sourceStatus,
+    recordCount: details.recordCount,
+    usedFallback: details.usedFallback,
+    fallbackReason: details.fallbackReason,
+    missingCriticalFields: details.missingCriticalFields,
+    completedAt: new Date().toISOString()
+  });
+}
+
 function sourceNameForCollection(collection: BrightDataCollectionResult) {
   return collection.sourceProducts[0] ?? collection.brightDataProduct;
 }
@@ -185,6 +386,7 @@ function buildRawSourceSnapshots(runId: string, collection: BrightDataCollection
       analysisRunId: runId,
       source,
       status,
+      ...(attempt.sourceUrl ? { sourceUrl: attempt.sourceUrl } : {}),
       errorCode:
         status === "failed"
           ? "scraper_failed"
@@ -199,7 +401,8 @@ function buildRawSourceSnapshots(runId: string, collection: BrightDataCollection
         inputType: attempt.inputType,
         operation: attempt.operation,
         datasetId: attempt.datasetId,
-        snapshotId: attempt.snapshotId
+        snapshotId: attempt.snapshotId,
+        sourceUrl: attempt.sourceUrl
       },
       recordCount: attempt.recordCount ?? 0,
       receivedAt,
@@ -362,6 +565,11 @@ function buildEvidenceMetadata(
   return collection.evidenceRefs.map((ref) => {
     const product = collection.products.find((candidate) => candidate.evidenceRefs.includes(ref.id));
     const matchScore = Math.round((product?.matchConfidence ?? product?.confidence ?? 0.65) * 100);
+    const sourceUrl = firstHttpUrl(ref.url, product?.sourceUrl, product?.productUrl, product?.marketplaceUrl);
+    const productUrl = firstHttpUrl(product?.productUrl, sourceUrl);
+    const marketplaceUrl = firstHttpUrl(product?.marketplaceUrl, sourceUrl);
+    const supplierUrl = firstHttpUrl(product?.supplierUrl);
+    const rawSourceSnapshotId = product?.rawSourceSnapshotId ?? rawRef;
 
     return {
       runId,
@@ -379,8 +587,10 @@ function buildEvidenceMetadata(
       datasetId: collection.datasetId,
       operation: collection.operation,
       snapshotId: collection.snapshotId,
-      ...(ref.url ? { sourceUrl: ref.url } : {}),
-      ...(ref.url ? { productUrl: ref.url } : {}),
+      ...(sourceUrl ? { sourceUrl } : {}),
+      ...(productUrl ? { productUrl } : {}),
+      ...(marketplaceUrl ? { marketplaceUrl } : {}),
+      ...(supplierUrl ? { supplierUrl } : {}),
       ...(product?.imageUrl ? { imageUrl: product.imageUrl } : {}),
       title: product?.title ?? ref.label,
       price: product?.priceUsd ?? product?.price,
@@ -390,8 +600,10 @@ function buildEvidenceMetadata(
       availability: product?.availability,
       sellerName: product?.supplierName,
       category: product?.category,
+      ...(rawSourceSnapshotId ? { rawSourceSnapshotId } : {}),
       ...(rawRef ? { rawRef } : {}),
       capturedAt: ref.collectedAt ?? collection.collectedAt,
+      lastSeenAt: product?.lastSeenAt ?? product?.lastUpdated ?? ref.collectedAt ?? collection.collectedAt,
       mode: sourceMode,
       sourceMode,
       extractedFields: extractedProductFields(product as Record<string, unknown> | undefined),
@@ -576,6 +788,11 @@ function buildSupplierOptions(context: MarketContextPayload, products: Normalize
     .map((product, index) => ({
       supplierName: product.supplierName ?? `${context.supplierSource} option ${index + 1}`,
       source: product.source,
+      ...(product.sourceUrl ? { sourceUrl: product.sourceUrl } : {}),
+      ...(product.productUrl ? { productUrl: product.productUrl } : {}),
+      ...(product.supplierUrl ? { supplierUrl: product.supplierUrl } : {}),
+      ...(product.rawSourceSnapshotId ? { rawSourceSnapshotId: product.rawSourceSnapshotId } : {}),
+      lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
       estimatedUnitCost: product.supplierPrice ?? 0,
       estimatedDeliveryTime: product.estimatedDeliveryTime ?? "Validation required",
       availability: product.availability ?? "Unknown",
@@ -645,6 +862,7 @@ function buildRecommendation(
   verdict: VerdictAgentOutput,
   products: NormalizedProduct[],
   evidencePackage: EvidencePackage,
+  sourceEvidenceRefs: EvidenceRef[],
   sourceMode: SourceMode,
   outputs: AgentOutput[],
   metricMap: Record<string, number | null>,
@@ -694,32 +912,84 @@ function buildRecommendation(
       : context.businessGoal === "revenue_stock_opportunities"
         ? "revenue_or_margin_expansion"
         : "new_product_or_sourcing_validation";
+  const normalizedRequestedCategory = context.category.trim().toLowerCase();
+  const normalizedCandidateCategory = primary?.category?.trim().toLowerCase() ?? "";
+  const categoryFit =
+    normalizedCandidateCategory && normalizedRequestedCategory
+      ? normalizedCandidateCategory.includes(normalizedRequestedCategory) || normalizedRequestedCategory.includes(normalizedCandidateCategory)
+        ? 0.9
+        : 0.45
+      : null;
+  const productFamilyFit = primary?.matchConfidence ?? null;
+  const lowFit =
+    (productFamilyFit !== null && productFamilyFit < 0.65) ||
+    (categoryFit !== null && categoryFit < 0.5);
+  const validationOnly = lowFit && (sourceFallbackUsed(sourceMode) || recommendationDataQuality.status !== "success");
+  const adjustedFinalScore = validationOnly ? Math.min(finalScore, 0.55) : finalScore;
+  const adjustedConfidence = Math.max(
+    0,
+    Math.min(1, verdict.confidence - (recommendationDataQuality.confidencePenaltyApplied ?? 0) - (validationOnly ? 0.2 : 0))
+  );
+  const adjustedRisk = validationOnly ? "high" : riskForLegacy(verdict.riskLevel);
+  const adjustedAction = validationOnly
+    ? `Validate ${context.productName} fit before acting on this opportunity`
+    : verdict.recommendedAction;
+  const adjustedReasoning = validationOnly
+    ? "AMI could not fully validate live product-family fit for the requested briefing. Treat this result as validation-only because the selected evidence came from broader or degraded source data."
+    : verdict.reasoning;
+  const adjustedNextStep = validationOnly
+    ? "Run a fresh live marketplace search or confirm supplier and marketplace evidence before purchase, listing, or promotion decisions."
+    : verdict.nextStep;
+  const evidenceLinks = buildEvidenceLinks(evidencePackage, products, sourceEvidenceRefs);
+  const sourceUrls = evidenceLinks.filter((link) => link.sourceType === "marketplace" || link.sourceType === "search");
+
+  amiDiagLog("analysis_candidate_selected", {
+    analysisRunId,
+    businessGoal: context.businessGoal,
+    requestedProductFamily: context.productName,
+    requestedCategory: context.category,
+    candidateTitle: primary?.title,
+    candidateCategory: primary?.category,
+    candidateSource: primary?.source,
+    productFamilyFit,
+    categoryFit,
+    finalMatchScore: metricMap.finalMatchScore ?? null,
+    demandScore: metricMap.demandScore ?? null,
+    trendMomentum: metricMap.trendMomentum ?? null,
+    supplierAvailability: metricMap.supplierAvailabilityScore ?? null,
+    sourceMode,
+    usedFallback: sourceFallbackUsed(sourceMode),
+    dataQualityStatus: recommendationDataQuality.status
+  });
 
   return RecommendationSchema.parse({
     recommendationId: randomUUID(),
     analysisRunId,
     workspaceId,
     businessGoal: context.businessGoal,
-    recommendedAction: verdict.recommendedAction,
-    opportunityType,
-    finalScore,
-    confidence: Math.max(0, Math.min(1, verdict.confidence - (recommendationDataQuality.confidencePenaltyApplied ?? 0))),
-    risk: riskForLegacy(verdict.riskLevel),
-    reasoningSummary: verdict.reasoning,
+    recommendedAction: adjustedAction,
+    opportunityType: validationOnly ? "validation_only_low_fit" : opportunityType,
+    finalScore: adjustedFinalScore,
+    confidence: adjustedConfidence,
+    risk: adjustedRisk,
+    reasoningSummary: adjustedReasoning,
     metrics: metricMap,
     agentContributions,
     dataQuality: recommendationDataQuality,
     evidenceRefs: evidencePackage ? [evidencePackage.evidencePackageId, ...products.flatMap((product) => product.evidenceRefs)].filter(Boolean) : [],
-    opportunityScore: Math.round(finalScore * 100),
+    evidenceLinks,
+    sourceUrls,
+    primarySourceUrl: evidenceLinks[0]?.url ?? null,
+    opportunityScore: Math.round(adjustedFinalScore * 100),
     estimatedMargin: primary?.estimatedMargin ?? evidencePackage.estimatedMargin ?? 0,
     demandSignal: signalLevel(primary?.demandSignal ?? 55),
-    riskLevel: riskForLegacy(verdict.riskLevel),
-    confidenceLevel: confidenceLevel(Math.max(0, Math.min(1, verdict.confidence - (recommendationDataQuality.confidencePenaltyApplied ?? 0)))),
+    riskLevel: adjustedRisk,
+    confidenceLevel: confidenceLevel(adjustedConfidence),
     signalStrength: signalLevel(primary?.trendMomentum ?? 55),
     dataFreshness: dataFreshnessForMode(sourceMode),
     matchQuality: confidenceLevel(primary?.matchConfidence ?? 0.6),
-    primaryReason: verdict.reasoning,
-    suggestedNextStep: verdict.nextStep,
+    primaryReason: adjustedReasoning,
+    suggestedNextStep: adjustedNextStep,
     assistantContributions: outputs.map((output) => contributionFromOutput(output, sourceMode)),
     evidencePackageId: evidencePackage.evidencePackageId,
     sourceMode,
@@ -748,17 +1018,52 @@ function assistantStatusRecord(agentStatus: AnalysisResult["agentStatus"]): Anal
 export async function createAnalysisRunToMetrics(
   workspaceId: string,
   context: MarketContextPayload,
-  inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext }
+  inventoryContext: InventoryRunContext = { requested: context.useInventoryContext, available: context.useInventoryContext },
+  diagnostics: AnalysisDiagnostics = {}
 ): Promise<AnalysisResult> {
   const analysisRunId = randomUUID();
   const startedAt = new Date().toISOString();
+  const requestId = diagnostics.requestId ?? createDiagRequestId("analysis_metrics");
+  const diagContext = {
+    ...briefingDiagFields(context, workspaceId),
+    briefingFingerprint: diagnostics.briefingFingerprint ?? briefingDiagFields(context, workspaceId).briefingFingerprint
+  };
+  amiDiagLog("analysis_metrics_run_created", {
+    requestId,
+    analysisRunId,
+    startedAt,
+    ...diagContext
+  });
   amiLog("RUN", "RUN_CREATED", {
     runId: analysisRunId,
     workspaceId,
     marketplace: context.targetMarketplace,
     product: context.productName
   });
-  const collection = await collectBrightDataEvidence(context);
+  amiDiagLog("analysis_source_collection_started", {
+    requestId,
+    analysisRunId,
+    startedAt: new Date().toISOString(),
+    sourceRole: "marketplace_demand",
+    ...diagContext
+  });
+  const collection = await collectBrightDataEvidence(context, undefined, {
+    requestId,
+    analysisRunId,
+    briefingFingerprint: diagContext.briefingFingerprint
+  });
+  amiDiagLog("analysis_source_collection_completed", {
+    requestId,
+    analysisRunId,
+    completedAt: new Date().toISOString(),
+    sourceStatus: collection.status,
+    usedFallback: collection.usedFallback,
+    fallbackReason: collection.fallbackReason,
+    sourceName: sourceNameForCollection(collection),
+    sourceRole: "marketplace_demand",
+    sourceMode: collection.status,
+    recordCount: collection.products.length
+  });
 
   if (collection.liveAttempted) {
     amiLog("BRIGHTDATA", "SOURCE_COLLECTION_START", {
@@ -893,6 +1198,42 @@ export async function createAnalysisRunToMetrics(
   const rawSourceSnapshots = buildRawSourceSnapshots(analysisRunId, collection);
   const rawSourceSummary = buildRawSourceSummary(rawSourceSnapshots);
   const dataQualitySummary = buildDataQualitySummary(collection, collection.products);
+  const roleSourceStatus = rawStatusFromDataQuality(dataQualitySummary);
+  for (const [sourceRole, sourceName] of [
+    ["trend_signal", "Normalized marketplace evidence for Trend Assistant"],
+    ["supplier_feasibility", "Normalized supplier feasibility proxy"],
+    ["orchestrator_synthesis", "AMI Orchestrator normalized evidence"]
+  ] as const) {
+    logSourceRoleCollection({
+      requestId,
+      analysisRunId,
+      context,
+      briefingFingerprint: diagContext.briefingFingerprint,
+      sourceName,
+      sourceRole,
+      sourceStatus: roleSourceStatus,
+      recordCount: collection.products.length,
+      usedFallback: collection.usedFallback,
+      fallbackReason: collection.fallbackReason,
+      missingCriticalFields: dataQualitySummary.missingCriticalFields
+    });
+  }
+  logSourceRoleCollection({
+    requestId,
+    analysisRunId,
+    context,
+    briefingFingerprint: diagContext.briefingFingerprint,
+    sourceName: inventoryContext.available
+      ? inventoryContext.sourceLabel ?? "Connected inventory context"
+      : inventoryContext.requested
+        ? "Inventory context unavailable"
+        : "Inventory context not requested",
+    sourceRole: "inventory_context",
+    sourceStatus: inventoryContext.available ? "success" : "empty",
+    recordCount: inventoryContext.available ? 1 : 0,
+    usedFallback: false,
+    fallbackReason: inventoryContext.warningMessage
+  });
   const analysisRun = buildAnalysisRunContract(workspaceId, analysisRunId, context, initialStatus, collection, startedAt);
   const resultSourceMode = analysisRun.sourceMode;
   const graphData = buildGraphData(collection.products, metrics);
@@ -927,6 +1268,7 @@ export async function createAnalysisRunToMetrics(
     pendingVerdict,
     collection.products,
     evidencePackages[0],
+    collection.evidenceRefs,
     resultSourceMode,
     pendingOutputs,
     metrics.canonicalMetrics,
@@ -1074,6 +1416,7 @@ export async function completeAnalysisRun(metricsRun: AnalysisResult): Promise<A
     finalVerdict,
     metricsRun.normalizedProducts,
     primaryEvidence,
+    metricsRun.evidenceRefs,
     sourceMode,
     outputs,
     metrics.canonicalMetrics,

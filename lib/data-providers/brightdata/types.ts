@@ -79,6 +79,7 @@ export type BrightDataAttempt = {
   datasetId?: string;
   scraperName?: string;
   snapshotId?: string;
+  sourceUrl?: string;
   recordCount?: number;
 };
 

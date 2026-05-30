@@ -89,10 +89,22 @@ export function writeRunArtifacts(result: AnalysisResult) {
       sourceProduct: item.sourceProduct,
       sourceName: item.sourceName,
       sourceMode: item.sourceMode,
+      url: item.url,
       sourceUrl: item.sourceUrl,
+      productUrl: item.productUrl,
+      supplierUrl: item.supplierUrl,
+      marketplaceUrl: item.marketplaceUrl,
+      rawSourceSnapshotId: item.rawSourceSnapshotId,
+      rawRef: item.rawRef,
       title: item.title ?? item.productIdentity,
       price: item.price ?? item.currentPrice,
       extractedFields: item.extractedFields
+    })),
+    recommendationLinks: result.recommendations.map((item) => ({
+      recommendationId: item.recommendationId,
+      primarySourceUrl: item.primarySourceUrl,
+      evidenceLinks: item.evidenceLinks,
+      sourceUrls: item.sourceUrls
     }))
   });
   writeJson(join(dir, "assistant-runs.json"), result.assistantRunTrace);

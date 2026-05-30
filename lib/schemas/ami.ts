@@ -51,6 +51,15 @@ export const AnalysisRunModeSchema = z.enum(["live", "demo", "fallback"]);
 export const CanonicalSourceModeSchema = z.enum(["live", "demo", "mixed", "fallback"]);
 export const RawSourceStatusSchema = z.enum(["success", "partial", "empty", "failed"]);
 export const DataQualityStatusSchema = z.enum(["success", "partial", "degraded", "failed"]);
+export const EvidenceLinkSchema = z.object({
+  label: z.string().min(1),
+  url: z.string().url(),
+  sourceName: z.string().min(1),
+  sourceType: z.enum(["marketplace", "supplier", "trend", "raw_snapshot", "search"]),
+  sourceStatus: RawSourceStatusSchema.optional(),
+  lastSeenAt: z.string().optional(),
+  rawSourceSnapshotId: z.string().optional()
+});
 export const SourceProofItemSchema = z.object({
   title: z.string().min(1),
   sourceType: z.enum(["brightdata", "provider", "demo_fallback", "manual", "unknown"]),
@@ -89,6 +98,7 @@ export const RawSourceSnapshotRecordSchema = z.object({
   analysisRunId: z.string(),
   source: z.string(),
   status: RawSourceStatusSchema,
+  sourceUrl: z.string().url().optional(),
   errorCode: z.string().nullable().optional(),
   errorMessage: z.string().nullable().optional(),
   input: z.record(z.unknown()).default({}),
@@ -144,6 +154,8 @@ export const EvidenceTraceMetadataSchema = z.object({
   snapshotId: z.string().optional(),
   sourceUrl: z.string().url().optional(),
   productUrl: z.string().url().optional(),
+  marketplaceUrl: z.string().url().optional(),
+  supplierUrl: z.string().url().optional(),
   imageUrl: z.string().url().optional(),
   title: z.string().optional(),
   price: z.number().optional(),
@@ -153,8 +165,10 @@ export const EvidenceTraceMetadataSchema = z.object({
   availability: z.string().optional(),
   sellerName: z.string().optional(),
   category: z.string().optional(),
+  rawSourceSnapshotId: z.string().optional(),
   rawRef: z.string().optional(),
   capturedAt: z.string(),
+  lastSeenAt: z.string().optional(),
   mode: NormalizedSourceModeSchema,
   sourceMode: NormalizedSourceModeSchema.optional(),
   extractedFields: z.record(z.unknown()).default({}),
@@ -329,6 +343,8 @@ export const EvidencePackageSchema = z.object({
   runId: z.string().optional(),
   sourceMarketplace: z.string(),
   sourceType: z.string(),
+  sourceStatus: RawSourceStatusSchema.optional(),
+  url: z.string().url().optional(),
   sourceUrl: z.string().url().nullable().optional(),
   sourceProvider: SourceProviderSchema.optional(),
   sourceProduct: z.string().optional(),
@@ -339,6 +355,8 @@ export const EvidencePackageSchema = z.object({
   operation: z.string().optional(),
   snapshotId: z.string().optional(),
   productUrl: z.string().url().optional(),
+  supplierUrl: z.string().url().optional(),
+  marketplaceUrl: z.string().url().optional(),
   imageUrl: z.string().url().optional(),
   title: z.string().optional(),
   price: z.number().optional(),
@@ -348,8 +366,10 @@ export const EvidencePackageSchema = z.object({
   availability: z.string().optional(),
   sellerName: z.string().optional(),
   category: z.string().optional(),
+  rawSourceSnapshotId: z.string().optional(),
   rawRef: z.string().optional(),
   capturedAt: z.string().optional(),
+  lastSeenAt: z.string().optional(),
   mode: NormalizedSourceModeSchema.optional(),
   extractedFields: z.record(z.unknown()).default({}),
   assistantTypesUsedBy: z.array(SpecialistAssistantSchema).default([]),
@@ -375,6 +395,11 @@ export const EvidencePackageSchema = z.object({
 export const SupplierOptionSchema = z.object({
   supplierName: z.string().min(2),
   source: z.string().min(2),
+  sourceUrl: z.string().url().optional(),
+  productUrl: z.string().url().optional(),
+  supplierUrl: z.string().url().optional(),
+  rawSourceSnapshotId: z.string().optional(),
+  lastSeenAt: z.string().optional(),
   estimatedUnitCost: z.number().nonnegative(),
   estimatedDeliveryTime: z.string().min(2),
   availability: z.string().min(2),
@@ -386,6 +411,12 @@ export const SupplierOptionSchema = z.object({
 export const NormalizedProductSchema = z.object({
   source: z.string().min(1),
   externalId: z.string().optional(),
+  sourceUrl: z.string().url().optional(),
+  productUrl: z.string().url().optional(),
+  marketplaceUrl: z.string().url().optional(),
+  supplierUrl: z.string().url().optional(),
+  rawSourceSnapshotId: z.string().optional(),
+  lastSeenAt: z.string().optional(),
   title: z.string().min(1),
   canonicalTitle: z.string().optional(),
   brand: z.string().optional(),
@@ -494,6 +525,9 @@ export const RecommendationSchema = z.object({
   agentContributions: RecommendationAgentContributionsSchema.default({}),
   dataQuality: DataQualitySchema.optional(),
   evidenceRefs: z.array(z.string()).default([]),
+  evidenceLinks: z.array(EvidenceLinkSchema).default([]),
+  sourceUrls: z.array(EvidenceLinkSchema).default([]),
+  primarySourceUrl: z.string().url().nullable().default(null),
   opportunityScore: z.number().min(0).max(100),
   estimatedMargin: z.number(),
   demandSignal: SignalStrengthSchema,
@@ -630,6 +664,7 @@ export type AnalysisRunMode = z.infer<typeof AnalysisRunModeSchema>;
 export type CanonicalSourceMode = z.infer<typeof CanonicalSourceModeSchema>;
 export type RawSourceStatus = z.infer<typeof RawSourceStatusSchema>;
 export type DataQuality = z.infer<typeof DataQualitySchema>;
+export type EvidenceLink = z.infer<typeof EvidenceLinkSchema>;
 export type AnalysisRunContract = z.infer<typeof AnalysisRunContractSchema>;
 export type RawSourceSnapshotRecord = z.infer<typeof RawSourceSnapshotRecordSchema>;
 export type RawSourceSummary = z.infer<typeof RawSourceSummarySchema>;

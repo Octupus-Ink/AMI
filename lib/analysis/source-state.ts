@@ -344,7 +344,7 @@ export function normalizeVisibleEvidenceItems(
       title: sanitizeEvidenceTitle(record.label ?? record.title ?? record.sourceType),
       sourceType,
       sourceMode: proofModeFor(sourceState.mode, isFallback),
-      sourceUrl: toHttpSourceUrl(record.url ?? record.sourceUrl),
+      sourceUrl: toHttpSourceUrl(record.url ?? record.sourceUrl ?? record.productUrl ?? record.marketplaceUrl),
       collectedAt: readString(record.collectedAt) ?? collectedAt ?? new Date().toISOString(),
       snippet: sanitizeEvidenceSnippet(record.snippet),
       isFallback
