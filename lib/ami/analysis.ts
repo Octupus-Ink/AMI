@@ -443,8 +443,15 @@ function buildRawSourceSummary(rawSourceSnapshots: RawSourceSnapshotRecord[]) {
 
 function buildDataQualitySummary(collection: BrightDataCollectionResult, products: NormalizedProduct[]): DataQuality {
   const rawSourceSnapshots = buildRawSourceSnapshots("preview", collection);
-  const failedSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "failed").map((snapshot) => snapshot.source);
-  const partialSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "partial").map((snapshot) => snapshot.source);
+  const rawFailedSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "failed").map((snapshot) => snapshot.source);
+  // Attempt-level failures are only surfaced as "failed" when no product records were collected.
+  // When products exist (another path succeeded), those attempts are downgraded to partial — they
+  // represent incomplete coverage, not a blocking data failure.
+  const failedSources = products.length > 0 ? [] : rawFailedSources;
+  const partialSources = [
+    ...rawSourceSnapshots.filter((snapshot) => snapshot.status === "partial").map((snapshot) => snapshot.source),
+    ...(products.length > 0 ? rawFailedSources : [])
+  ];
   const emptySources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "empty").map((snapshot) => snapshot.source);
   const missingCriticalFields = Array.from(
     new Set(products.flatMap((product) => product.dataQuality?.missingFields ?? []).filter(Boolean))
@@ -456,7 +463,7 @@ function buildDataQualitySummary(collection: BrightDataCollectionResult, product
       ]
     : products.flatMap((product) => product.dataQuality?.fallbackFields ?? []);
   const criticalFallbackPenalty = fallbackPenalty(fallbacksUsed.length);
-  const failedPenalty = Math.min(failedSources.length * 0.08, 0.24);
+  const failedPenalty = Math.min(rawFailedSources.length * 0.08, 0.24);
   const completeness = fieldCompleteness(Math.max(0, 4 - missingCriticalFields.length), 4);
   const reliability = weightedAvailableScore(
     rawSourceSnapshots.length
@@ -783,25 +790,119 @@ function fallbackVerdict(analysisRunId: string, context: MarketContextPayload, p
 function buildSupplierOptions(context: MarketContextPayload, products: NormalizedProduct[]): SupplierOption[] {
   const seen = new Set<string>();
 
+  const hasNonBlank = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
+  const hasPositiveSupplierPrice = (product: NormalizedProduct) =>
+    product.supplierPrice !== undefined && product.supplierPrice !== null && Number.isFinite(product.supplierPrice) && product.supplierPrice > 0;
+  const isPlaceholderSupplierName = (value: unknown) =>
+    !hasNonBlank(value) || /verified supplier catalog|web unlocker|amazon products search|marketplace search|demo seed|fallback/i.test(String(value));
+  const sourceText = (product: NormalizedProduct) =>
+    [
+      product.source,
+      product.sourceUrl,
+      product.productUrl,
+      product.marketplaceUrl,
+      product.supplierUrl,
+      context.targetMarketplace
+    ]
+      .filter((value): value is string => hasNonBlank(value))
+      .join(" ")
+      .toLowerCase();
+  const isPrimarySupplierSource = (product: NormalizedProduct) =>
+    /alibaba|aliexpress|1688\.com|dhgate|made-in-china|globalsources|indiamart/.test(sourceText(product));
+  const isEbayFallback = (product: NormalizedProduct) => /ebay/.test(sourceText(product));
+  const isAmazonSellerFallback = (product: NormalizedProduct) =>
+    /amazon/.test(sourceText(product)) &&
+    (!isPlaceholderSupplierName(product.supplierName) || Boolean(product.supplierUrl) || hasPositiveSupplierPrice(product));
+  const isWebUnlockerFallback = (product: NormalizedProduct) =>
+    /web unlocker/.test(sourceText(product)) &&
+    (!isPlaceholderSupplierName(product.supplierName) || Boolean(product.supplierUrl) || hasPositiveSupplierPrice(product));
+  const isFallbackSupplierSource = (product: NormalizedProduct) =>
+    isEbayFallback(product) || isAmazonSellerFallback(product) || isWebUnlockerFallback(product) || isSourceFallbackMode(product.source);
+  const isSupplierOrFallbackSource = (product: NormalizedProduct) => isPrimarySupplierSource(product) || isFallbackSupplierSource(product);
+  const hasSupplierIdentity = (product: NormalizedProduct) =>
+    isSupplierOrFallbackSource(product) ||
+    !isPlaceholderSupplierName(product.supplierName) ||
+    Boolean(product.supplierUrl);
+  const hasRealSupplierEvidence = (product: NormalizedProduct) =>
+    hasPositiveSupplierPrice(product) ||
+    hasNonBlank(product.estimatedDeliveryTime) ||
+    hasNonBlank(product.availability) ||
+    (product.estimatedDeliveryDays !== undefined && product.estimatedDeliveryDays !== null && Number.isFinite(product.estimatedDeliveryDays)) ||
+    (product.rating !== undefined && product.rating !== null && Number.isFinite(product.rating)) ||
+    (product.reviewsCount !== undefined && product.reviewsCount !== null && Number.isFinite(product.reviewsCount)) ||
+    hasNonBlank(product.supplierUrl) ||
+    (isSupplierOrFallbackSource(product) && Boolean(product.sourceUrl || product.productUrl || product.rawSourceSnapshotId));
+  const supplierSourceLabel = (product: NormalizedProduct) => {
+    const text = sourceText(product);
+    if (/alibaba|1688\.com/.test(text)) return "Alibaba supplier source";
+    if (/aliexpress/.test(text)) return "AliExpress supplier source";
+    if (/dhgate/.test(text)) return "DHgate supplier source";
+    if (/made-in-china/.test(text)) return "Made-in-China supplier source";
+    if (/globalsources/.test(text)) return "GlobalSources supplier source";
+    if (/indiamart/.test(text)) return "IndiaMART supplier source";
+    if (isEbayFallback(product)) return "eBay fallback supplier signal";
+    if (isAmazonSellerFallback(product)) return "Amazon seller fallback";
+    if (isWebUnlockerFallback(product)) return "Web Unlocker fallback";
+    if (isSourceFallbackMode(product.source)) return "Fallback supplier signal";
+    return product.source;
+  };
+
   return products
-    .filter((product) => product.supplierPrice !== undefined && product.supplierPrice !== null)
-    .map((product, index) => ({
-      supplierName: product.supplierName ?? `${context.supplierSource} option ${index + 1}`,
-      source: product.source,
-      ...(product.sourceUrl ? { sourceUrl: product.sourceUrl } : {}),
-      ...(product.productUrl ? { productUrl: product.productUrl } : {}),
-      ...(product.supplierUrl ? { supplierUrl: product.supplierUrl } : {}),
-      ...(product.rawSourceSnapshotId ? { rawSourceSnapshotId: product.rawSourceSnapshotId } : {}),
-      lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
-      estimatedUnitCost: product.supplierPrice ?? 0,
-      estimatedDeliveryTime: product.estimatedDeliveryTime ?? "Validation required",
-      availability: product.availability ?? "Unknown",
-      ratingQualityProxy: product.rating ? `${product.rating.toFixed(1)} / 5 rating proxy` : "Quality proxy pending",
-      matchConfidence: confidenceLevel(product.matchConfidence ?? 0.6),
-      risk: riskForLegacy((product.riskScore ?? 50) >= 75 ? "high" : (product.riskScore ?? 50) >= 45 ? "medium" : "low")
-    }))
+    .filter((product) => {
+      // A) Supplier identity/source signal exists
+      if (!hasSupplierIdentity(product)) return false;
+
+      // B) At least one real supplier evidence signal exists (partial evidence allowed)
+      if (!hasRealSupplierEvidence(product)) return false;
+
+      return true;
+    })
+    .map((product, index) => {
+      const isFallback = !isPrimarySupplierSource(product) || isFallbackSupplierSource(product);
+
+      const hasDelivery = hasNonBlank(product.estimatedDeliveryTime);
+      const hasAvailability = hasNonBlank(product.availability);
+      const rating = product.rating !== undefined && product.rating !== null ? Number(product.rating) : Number.NaN;
+      const hasRating = Number.isFinite(rating);
+      const supplierName = isPlaceholderSupplierName(product.supplierName)
+        ? isFallback
+          ? "Fallback supplier signal"
+          : "Supplier validation required"
+        : product.supplierName;
+
+      return {
+        supplierName: supplierName ?? `${supplierSourceLabel(product)} option ${index + 1}`,
+        source: supplierSourceLabel(product),
+        ...(product.externalId ? { externalId: product.externalId } : {}),
+        evidenceRefIds: product.evidenceRefs,
+        ...(product.sourceUrl ? { sourceUrl: product.sourceUrl } : {}),
+        ...(product.productUrl ? { productUrl: product.productUrl } : {}),
+        ...(product.supplierUrl ? { supplierUrl: product.supplierUrl } : {}),
+        ...(product.rawSourceSnapshotId ? { rawSourceSnapshotId: product.rawSourceSnapshotId } : {}),
+        lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
+        estimatedUnitCost: hasPositiveSupplierPrice(product) ? product.supplierPrice ?? null : null,
+        // SupplierOptionSchema requires these strings; use explicit "Unknown" only when the real field is missing.
+        estimatedDeliveryTime: hasDelivery ? (product.estimatedDeliveryTime as string) : "Unknown delivery time (not provided)",
+        availability: hasAvailability ? (product.availability as string) : "Unknown availability (not provided)",
+        ratingQualityProxy: hasRating ? `${rating.toFixed(1)} / 5 rating proxy` : "Unknown rating (not provided)",
+        matchConfidence: confidenceLevel(product.matchConfidence ?? 0.6),
+        risk: riskForLegacy((product.riskScore ?? 50) >= 75 ? "high" : (product.riskScore ?? 50) >= 45 ? "medium" : "low"),
+        isFallback
+      };
+    })
     .filter((supplier) => {
-      const key = `${supplier.supplierName}-${supplier.estimatedUnitCost}`;
+      const key = [
+        supplier.externalId,
+        supplier.evidenceRefIds.join("|"),
+        supplier.rawSourceSnapshotId,
+        supplier.supplierUrl,
+        supplier.productUrl,
+        supplier.sourceUrl,
+        supplier.supplierName,
+        supplier.estimatedUnitCost
+      ]
+        .filter(Boolean)
+        .join("::");
 
       if (seen.has(key)) {
         return false;

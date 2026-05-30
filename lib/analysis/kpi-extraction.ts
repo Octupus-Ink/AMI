@@ -53,8 +53,8 @@ export function extractPreliminaryMetrics(products: NormalizedProduct[], evidenc
   const inventoryRisk = Math.round(average(products.map((product) => product.inventoryRisk ?? Number.NaN), 45));
   const trendMomentumScore = Math.round(average(products.map((product) => product.trendMomentum ?? Number.NaN), 60));
   const averagePrice = average(products.map((product) => product.priceUsd ?? product.price ?? Number.NaN), 30);
-  const averageSupplierPrice = average(products.map((product) => product.supplierPrice ?? Number.NaN), averagePrice * 0.62);
-  const supplierGap = Number((averagePrice - averageSupplierPrice).toFixed(2));
+  const averageSupplierPrice = average(products.map((product) => product.supplierPrice ?? Number.NaN), Number.NaN);
+  const supplierGap = Number.isFinite(averageSupplierPrice) ? Number((averagePrice - averageSupplierPrice).toFixed(2)) : 0;
   const opportunityScoreBase = Math.round(
     clamp(estimatedMargin * 0.8 + demandSignal * 0.25 + trendMomentumScore * 0.2 - pricePressure * 0.12 - inventoryRisk * 0.1)
   );
@@ -197,6 +197,7 @@ export function extractPreliminaryMetrics(products: NormalizedProduct[], evidenc
   });
   const missingCriticalFields = [
     primary?.priceDataStatus === "missing" ? "price" : "",
+    primary?.supplierPrice === undefined ? "supplierPrice" : "",
     primary?.reviewsCount === undefined ? "reviewsCount" : "",
     primary?.estimatedDeliveryDays === null ? "supplier_delivery_days" : ""
   ].filter(Boolean).length;

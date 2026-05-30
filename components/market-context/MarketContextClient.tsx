@@ -11,7 +11,7 @@ const initialContext: MarketContextPayload = {
   productName: "Insulated stainless steel tumbler",
   category: "Drinkware",
   targetMarketplace: "Amazon",
-  supplierSource: "Verified supplier catalog",
+  supplierSource: "Supplier validation required",
   businessGoal: "discover_new_products",
   region: "United States",
   currency: "USD",

@@ -54,7 +54,7 @@ const SUPPLIER_URL_KEYS = [
 ];
 const EXTERNAL_ID_KEYS = ["asin", "sku", "id", "product_id", "productId", "item_id", "itemId", "external_id", "externalId"];
 const RATING_KEYS = ["rating", "stars", "average_rating"];
-const REVIEWS_KEYS = ["reviews_count", "num_ratings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
+const REVIEWS_KEYS = ["reviews_count", "num_ratings", "numRatings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
 const AMAZON_ASIN_PATTERN = /^[A-Z0-9]{10}$/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -97,6 +97,12 @@ function resolveSupplierUrl(record: Record<string, unknown>) {
   return toHttpSourceUrl(findString(record, SUPPLIER_URL_KEYS));
 }
 
+function isSupplierMarketplaceSignal(...values: Array<string | null | undefined>) {
+  return values
+    .filter((value): value is string => Boolean(value?.trim()))
+    .some((value) => /alibaba|aliexpress|1688\.com|dhgate|made-in-china|globalsources|indiamart/i.test(value));
+}
+
 function findNumber(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -124,6 +130,26 @@ function findNestedRecord(record: Record<string, unknown>, key: string) {
 
 function findProductDetailString(record: Record<string, unknown>, parentKeys: string[], childKey: string) {
   for (const parentKey of parentKeys) {
+    const rawParent = record[parentKey];
+
+    // Array of { type, value } entries (Bright Data product-detail format)
+    if (Array.isArray(rawParent)) {
+      for (const entry of rawParent) {
+        const entryRecord = asRecord(entry);
+        if (
+          entryRecord &&
+          typeof entryRecord.type === "string" &&
+          entryRecord.type.trim().toLowerCase() === childKey.trim().toLowerCase() &&
+          typeof entryRecord.value === "string" &&
+          entryRecord.value.trim()
+        ) {
+          return entryRecord.value.trim();
+        }
+      }
+      continue;
+    }
+
+    // Plain object form
     const parent = findNestedRecord(record, parentKey);
     const candidate = parent?.[childKey];
 
@@ -157,14 +183,13 @@ function parseNumberFromText(value: unknown) {
 
 function resolvePrice(record: Record<string, unknown>) {
   const buyboxPrices = findNestedRecord(record, "buybox_prices");
-  const direct =
-    findNumber(record, ["final_price"]) ??
-    (buyboxPrices ? findNumber(buyboxPrices, ["final_price"]) : undefined) ??
+  return (
+    findNumber(record, ["finalPrice", "final_price"]) ??
+    (buyboxPrices ? findNumber(buyboxPrices, ["finalPrice", "final_price", "price", "initialPrice", "initial_price"]) : undefined) ??
     findNumber(record, ["sale_price"]) ??
     parseNumberFromText(record.price) ??
-    findNumber(record, ["initial_price"]);
-
-  return direct;
+    findNumber(record, ["priceUsd", "price_usd", "initialPrice", "initial_price"])
+  );
 }
 
 function resolveReviews(record: Record<string, unknown>) {
@@ -176,7 +201,7 @@ function resolveReviews(record: Record<string, unknown>) {
 }
 
 function resolveSalesSignal(record: Record<string, unknown>) {
-  return findNumber(record, ["bought_past_month", "sold"]) ?? parseNumberFromText(record.sold_count);
+  return findNumber(record, ["boughtPastMonth", "bought_past_month", "sold"]) ?? parseNumberFromText(record.sold_count);
 }
 
 function resolveAvailability(record: Record<string, unknown>, price: number | undefined) {
@@ -208,7 +233,8 @@ function resolveAvailability(record: Record<string, unknown>, price: number | un
     return "limited";
   }
 
-  if (findString(record, ["delivery", "deliveryEstimate", "shipping_time"]) && price !== undefined) {
+  const deliveryStr = Array.isArray(record.delivery) ? record.delivery[0] : undefined;
+  if ((deliveryStr ?? findString(record, ["delivery", "deliveryEstimate", "shipping_time"])) && price !== undefined) {
     return "likely_available";
   }
 
@@ -237,10 +263,13 @@ function parseDays(value: unknown) {
 }
 
 function resolveDeliveryDays(record: Record<string, unknown>) {
+  const deliveryValue = Array.isArray(record.delivery) ? record.delivery[0] : record.delivery;
   return (
-    parseDays(record.delivery) ??
+    parseDays(deliveryValue) ??
     parseDays(record.availability_date) ??
     parseDays(record.ships_to) ??
+    parseDays(record.estimatedDeliveryDays) ??
+    parseDays(record.estimatedDeliveryTime) ??
     parseDays(record.deliveryEstimate) ??
     parseDays(record.shipping_time)
   );
@@ -294,7 +323,11 @@ function resolveCategoryPath(record: Record<string, unknown>, context: MarketCon
     }
   }
 
-  const keyword = findString(record, ["keyword"]) ?? context.category;
+  const discoveryInput = findNestedRecord(record, "discovery_input") ?? findNestedRecord(record, "input");
+  const keyword =
+    findString(record, ["keyword"]) ??
+    (discoveryInput ? findString(discoveryInput, ["keyword"]) : undefined) ??
+    context.category;
   return keyword ? [keyword] : ["unknown"];
 }
 
@@ -387,12 +420,25 @@ function normalizeRecord(
   const rating = findNumber(record, RATING_KEYS);
   const reviewsCount = resolveReviews(record);
   const salesSignal = resolveSalesSignal(record);
+  const sourceUrl = evidenceRef.url;
+  const supplierUrl = resolveSupplierUrl(record);
   const supplierPrice = findNumber(record, ["supplierPrice", "supplier_price", "unit_cost", "cost"]);
-  const estimatedSupplierPrice = supplierPrice ?? (price ? Number((price * 0.58).toFixed(2)) : undefined);
+  const sourceIsSupplierMarketplace = isSupplierMarketplaceSignal(
+    sourceUrl,
+    supplierUrl,
+    findString(record, ["source", "sourceName", "source_name", "marketplace", "platform"]),
+    context.targetMarketplace
+  );
+  const supplierUnitCost = supplierPrice ?? (sourceIsSupplierMarketplace ? price : undefined);
   const estimatedMargin =
-    price && estimatedSupplierPrice ? Number((((price - estimatedSupplierPrice) / price) * 100).toFixed(1)) : undefined;
+    price && supplierUnitCost && !sourceIsSupplierMarketplace ? Number((((price - supplierUnitCost) / price) * 100).toFixed(1)) : undefined;
+  const isSponsored =
+    record.sponsored === true ||
+    record.sponsored === "true" ||
+    record.sponsered === true ||
+    record.sponsered === "true";
   const demandFallback = salesSignal ? clamp(45 + salesSignal / 100) : reviewsCount ? clamp(42 + reviewsCount / 25) : 56;
-  const demandSignal = signalFromText(`${title} ${evidenceRef.snippet ?? ""}`, demandFallback);
+  const demandSignal = signalFromText(`${title} ${isSponsored ? "sponsored" : ""} ${evidenceRef.snippet ?? ""}`, demandFallback);
   const pricePressure = price ? clamp(price < 25 ? 70 : price < 40 ? 58 : 44) : undefined;
   const trendMomentum = clamp((demandSignal + (rating ? rating * 14 : 56)) / 2);
   const inventoryRisk = clamp(100 - (estimatedMargin ?? 38));
@@ -400,10 +446,10 @@ function normalizeRecord(
   const estimatedDeliveryDays = resolveDeliveryDays(record) ?? null;
   const { brand, brandConfidence } = resolveBrand(record, title);
   const categoryPath = resolveCategoryPath(record, context);
-  const sourceUrl = evidenceRef.url;
-  const supplierUrl = resolveSupplierUrl(record);
+  const supplierName = findString(record, ["supplier", "seller", "merchant", "seller_name", "shop_name"]);
   const missingFields = [
     price === undefined ? "price" : "",
+    supplierUnitCost === undefined ? "supplierPrice" : "",
     reviewsCount === undefined ? "reviewsCount" : "",
     salesSignal === undefined ? "salesSignal" : "",
     estimatedDeliveryDays === null ? "estimatedDeliveryDays" : ""
@@ -431,10 +477,10 @@ function normalizeRecord(
     salesSignal,
     availability,
     estimatedDeliveryDays,
-    imageUrl: findString(record, ["image", "imageUrl", "image_url", "thumbnail", "main_image"]),
-    supplierName: findString(record, ["supplier", "seller", "merchant", "seller_name", "shop_name"]) ?? context.supplierSource,
-    supplierPrice: estimatedSupplierPrice,
-    estimatedDeliveryTime: findString(record, ["delivery", "deliveryEstimate", "shipping_time"]) ?? "Validation required",
+    imageUrl: findString(record, ["image_url", "image", "imageUrl", "thumbnail", "main_image"]),
+    ...(supplierName ? { supplierName } : {}),
+    ...(supplierUnitCost !== undefined ? { supplierPrice: supplierUnitCost } : {}),
+    estimatedDeliveryTime: (Array.isArray(record.delivery) ? (record.delivery as string[]).join(" | ") : undefined) ?? findString(record, ["delivery", "deliveryEstimate", "shipping_time"]),
     deliveryCostNote: findString(record, ["shipping", "delivery_cost", "deliveryCostNote"]),
     matchConfidence: title.toLowerCase().includes(context.productName.toLowerCase().split(" ")[0]) ? 0.82 : 0.58,
     demandSignal,
@@ -448,7 +494,7 @@ function normalizeRecord(
     evidenceRefs: [evidenceRef.id],
     dataQuality: {
       missingFields,
-      fallbackFields: price === undefined ? ["price_missing_no_margin_roi"] : [],
+      fallbackFields: price === undefined || supplierUnitCost === undefined ? ["missing_cost_no_margin_roi"] : [],
       sourceStatus: missingFields.length ? "partial" : "success"
     }
   });
@@ -473,7 +519,6 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
   const fallbackReason = reason.replace(/\.+$/g, "");
   const products = Array.from({ length: Math.min(maxResults, 5) }, (_, index) => {
     const price = Number((basePrice + index * 2.25).toFixed(2));
-    const supplierPrice = Number((price * (0.54 + index * 0.02)).toFixed(2));
     const evidence = EvidenceRefSchema.parse({
       id: `fallback_evidence_${index + 1}`,
       source: context.targetMarketplace,
@@ -484,7 +529,6 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
       provider: "demo_fallback",
       product: "Bright Data fallback"
     });
-    const estimatedMargin = Number((((price - supplierPrice) / price) * 100).toFixed(1));
     const demandSignal = clamp(70 - index * 4);
     const pricePressure = clamp(62 + index * 3);
     const trendMomentum = clamp(68 - index * 2);
@@ -510,25 +554,22 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
         reviewsCount: 420 - index * 55,
         salesSignal: 250 - index * 20,
         availability: index === 4 ? "limited" : "in_stock",
-        estimatedDeliveryDays: index > 2 ? 21 : 12,
-        supplierName: context.supplierSource,
-        supplierPrice,
-        estimatedDeliveryTime: index > 2 ? "14-21 days" : "8-12 days",
+        estimatedDeliveryDays: null,
+        estimatedDeliveryTime: "Supplier validation required",
         deliveryCostNote: "Delivery cost requires supplier validation",
         matchConfidence: index > 2 ? 0.68 : 0.84,
         demandSignal,
         pricePressure,
         trendMomentum,
         inventoryRisk,
-        estimatedMargin,
         riskScore: clamp((pricePressure + inventoryRisk) / 2),
         confidence: index > 2 ? 0.62 : 0.78,
         lastSeenAt: collectedAt,
         lastUpdated: collectedAt,
         evidenceRefs: [evidence.id],
         dataQuality: {
-          missingFields: [],
-          fallbackFields: ["deterministic_demo_seed"],
+          missingFields: ["supplierPrice", "estimatedDeliveryDays"],
+          fallbackFields: ["deterministic_demo_seed", "missing_cost_no_margin_roi"],
           sourceStatus: "partial"
         }
       })
