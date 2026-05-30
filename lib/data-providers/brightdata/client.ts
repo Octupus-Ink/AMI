@@ -381,15 +381,25 @@ function findSnapshotId(value: unknown): string | undefined {
   return undefined;
 }
 
+function buildProgressUrl(progressEndpoint: string, snapshotId: string): string {
+  if (progressEndpoint.includes("{snapshot_id}")) {
+    return progressEndpoint.replace("{snapshot_id}", encodeURIComponent(snapshotId));
+  }
+  if (progressEndpoint.includes("{id}")) {
+    return progressEndpoint.replace("{id}", encodeURIComponent(snapshotId));
+  }
+  // No placeholder — append as path segment
+  return progressEndpoint.replace(/\/?$/, `/${encodeURIComponent(snapshotId)}`);
+}
+
 async function pollSnapshotPayload(snapshotId: string, config: BrightDataConfig, diagnostics?: BrightDataRequestDiagnostics) {
   if (!config.webScraperProgressEndpoint) {
     return null;
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const url = new URL(config.webScraperProgressEndpoint);
-    url.searchParams.set("snapshot_id", snapshotId);
-    const payload = await requestJson(url.toString(), config.apiKey ?? "", undefined, config.timeoutMs, "GET", {
+    const url = buildProgressUrl(config.webScraperProgressEndpoint, snapshotId);
+    const payload = await requestJson(url, config.apiKey ?? "", undefined, config.timeoutMs, "GET", {
       ...diagnostics,
       sourceName: `${diagnostics?.sourceName ?? "Bright Data snapshot"} progress`
     });
