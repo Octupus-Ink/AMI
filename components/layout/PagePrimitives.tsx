@@ -25,12 +25,12 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <section className={cx("border-b border-slate-200 pb-6", className)}>
+    <section className={cx("border-b border-[var(--border)] pb-6", className)}>
       <div className="flex flex-wrap items-start justify-between gap-5">
         <div className="max-w-3xl">
           {eyebrow}
-          <h1 className="mt-4 text-3xl font-semibold leading-tight text-slate-950 sm:text-4xl">{title}</h1>
-          {description && <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>}
+          <h1 className="mt-4 text-3xl font-semibold leading-tight text-[var(--text)] sm:text-4xl">{title}</h1>
+          {description && <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">{description}</p>}
         </div>
         {actions}
       </div>
@@ -51,8 +51,8 @@ export function SectionHeader({ title, description, action }: { title: string; d
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
-        {description && <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>}
+        <h2 className="text-lg font-semibold text-[var(--text)]">{title}</h2>
+        {description && <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">{description}</p>}
       </div>
       {action}
     </div>
@@ -68,25 +68,26 @@ export function InlineCluster({ children, className }: PrimitiveProps) {
 }
 
 export function Surface({ children, className }: PrimitiveProps) {
-  return <div className={cx("rounded-lg border border-slate-200 bg-white p-5 shadow-sm", className)}>{children}</div>;
+  return <div className={cx("rounded-xl border border-[var(--border)] bg-[var(--surface-raised)] p-5 shadow-sm", className)}>{children}</div>;
 }
 
 export function DecisionSurface({ children, className }: PrimitiveProps) {
   return (
-    <div className={cx("rounded-lg border border-teal-200 bg-white p-6 shadow-sm shadow-teal-900/5", className)}>
+    <div className={cx("rounded-lg border border-[var(--border)] bg-[var(--surface-raised)] p-6 shadow-sm", className)}>
       {children}
     </div>
   );
 }
 
 export function DetailPanel({ children, className }: PrimitiveProps) {
-  return <div className={cx("rounded-lg border border-slate-200 bg-slate-50 p-4", className)}>{children}</div>;
+  return <div className={cx("rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4", className)}>{children}</div>;
 }
 
 export function StatusStrip({ children, className }: PrimitiveProps) {
   return (
-    <div className={cx("flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4", className)}>
+    <div className={cx("flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-4", className)}>
       {children}
     </div>
   );
 }
+
