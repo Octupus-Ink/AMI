@@ -1064,8 +1064,55 @@ export function RecommendationsClient() {
     return analysis.opportunities.find((recommendation) => recommendation.recommendationId === selectedId) ?? analysis.executiveRecommendation;
   }, [analysis, selectedId]);
 
-  if (!analysis || !selected) {
-    return null;
+  if (!analysis) {
+    return (
+      <PageShell>
+        <Surface className="p-6">
+          <div className="flex flex-col items-start gap-4">
+            <h2 className="text-xl font-semibold text-[var(--text)]">AMI Strategy</h2>
+            <p className="text-sm text-[var(--text-secondary)]">No analysis found for this session.</p>
+            <p className="text-sm text-[var(--text-tertiary)]">
+              No recommendation data is available for this session. Return to briefing and start a new AMI analysis.
+            </p>
+            <div>
+              <button
+                type="button"
+                onClick={() => router.push("/market-context-setup")}
+                className="mt-3 inline-flex items-center rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-hover)]"
+              >
+                Return to briefing
+              </button>
+            </div>
+          </div>
+        </Surface>
+      </PageShell>
+    );
+  }
+
+  if (!selected) {
+    return (
+      <PageShell>
+        <Surface className="p-6">
+          <div className="flex flex-col items-start gap-4">
+            <h2 className="text-xl font-semibold text-[var(--text)]">AMI Strategy</h2>
+            <p className="text-sm text-[var(--text-secondary)]">No recommendation is available yet.</p>
+            <p className="text-sm text-[var(--text-tertiary)]">
+              AMI could not identify a selected recommendation from the current analysis data. Return to briefing to
+              review the market context and run a new analysis.
+            </p>
+            <div>
+              <button
+                type="button"
+                onClick={() => router.push("/market-context-setup")}
+                className="mt-3 inline-flex items-center rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-hover)]"
+              >
+                Return to briefing
+              </button>
+            </div>
+          </div>
+        </Surface>
+      </PageShell>
+    );
   }
 
   const sourceState = sourceStateForAnalysis(analysis);
