@@ -809,7 +809,7 @@ export function RecommendationsClient() {
   ).length;
   const qualityNotice = dataQualityCopy(analysis);
 
-  return (
+  return (//<--- aqui abre
     <PageShell>
       <section className="border-b border-slate-200 pb-7">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
@@ -849,7 +849,7 @@ export function RecommendationsClient() {
         </section>
       )}
 
-      <Section className="border-b border-slate-200 pb-6">
+      {/* <Section className="border-b border-slate-200 pb-6">
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div>
             <p className="text-xs font-semibold uppercase text-slate-500">Final recommendation</p>
@@ -877,19 +877,9 @@ export function RecommendationsClient() {
             </dl>
           </div>
         </div>
-      </Section>
+      </Section> */}
 
-      {qualityNotice && (
-        <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <div className="flex items-start gap-3">
-            <ShieldAlert className="mt-1 text-amber-800" size={20} />
-            <div>
-              <p className="text-sm font-semibold text-amber-950">{qualityNotice.title}</p>
-              <p className="mt-1 text-sm leading-6 text-amber-950">{qualityNotice.body}</p>
-            </div>
-          </div>
-        </section>
-      )}
+      
 
       <Section className="border-b border-slate-200 pb-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -925,6 +915,18 @@ export function RecommendationsClient() {
         </div>
       </Section>
 
+   {qualityNotice && (
+        <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-1 text-amber-800" size={20} />
+            <div>
+              <p className="text-sm font-semibold text-amber-950">{qualityNotice.title}</p>
+              <p className="mt-1 text-sm leading-6 text-amber-950">{qualityNotice.body}</p>
+            </div>
+          </div>
+        </section>
+      )}
+  
       <Section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -1005,7 +1007,7 @@ export function RecommendationsClient() {
         </div>
       </section>
     </PageShell>
-  );
+  );//<----aqui
 }
 
 function Counter({ label, value }: { label: string; value: number }) {
