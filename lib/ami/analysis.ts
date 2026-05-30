@@ -443,8 +443,15 @@ function buildRawSourceSummary(rawSourceSnapshots: RawSourceSnapshotRecord[]) {
 
 function buildDataQualitySummary(collection: BrightDataCollectionResult, products: NormalizedProduct[]): DataQuality {
   const rawSourceSnapshots = buildRawSourceSnapshots("preview", collection);
-  const failedSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "failed").map((snapshot) => snapshot.source);
-  const partialSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "partial").map((snapshot) => snapshot.source);
+  const rawFailedSources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "failed").map((snapshot) => snapshot.source);
+  // Attempt-level failures are only surfaced as "failed" when no product records were collected.
+  // When products exist (another path succeeded), those attempts are downgraded to partial — they
+  // represent incomplete coverage, not a blocking data failure.
+  const failedSources = products.length > 0 ? [] : rawFailedSources;
+  const partialSources = [
+    ...rawSourceSnapshots.filter((snapshot) => snapshot.status === "partial").map((snapshot) => snapshot.source),
+    ...(products.length > 0 ? rawFailedSources : [])
+  ];
   const emptySources = rawSourceSnapshots.filter((snapshot) => snapshot.status === "empty").map((snapshot) => snapshot.source);
   const missingCriticalFields = Array.from(
     new Set(products.flatMap((product) => product.dataQuality?.missingFields ?? []).filter(Boolean))
@@ -456,7 +463,7 @@ function buildDataQualitySummary(collection: BrightDataCollectionResult, product
       ]
     : products.flatMap((product) => product.dataQuality?.fallbackFields ?? []);
   const criticalFallbackPenalty = fallbackPenalty(fallbacksUsed.length);
-  const failedPenalty = Math.min(failedSources.length * 0.08, 0.24);
+  const failedPenalty = Math.min(rawFailedSources.length * 0.08, 0.24);
   const completeness = fieldCompleteness(Math.max(0, 4 - missingCriticalFields.length), 4);
   const reliability = weightedAvailableScore(
     rawSourceSnapshots.length

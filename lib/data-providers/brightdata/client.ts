@@ -191,7 +191,7 @@ function hasLiveAttempt(attempts: BrightDataAttempt[]) {
 }
 
 function normalizedStatus(products: NormalizedProduct[]): "success" | "partial" {
-  const missingCritical = products.some((product) => !product.priceUsd || !product.reviewsCount || !product.availability || product.priceDataStatus === "missing");
+  const missingCritical = products.some((product) => !(product.price ?? product.priceUsd) || !product.reviewsCount || !product.availability || product.priceDataStatus === "missing");
   return missingCritical ? "partial" : "success";
 }
 

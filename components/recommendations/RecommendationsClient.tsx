@@ -147,6 +147,7 @@ type DrawerDetail = {
   whyItMatters?: string;
   expectedImpact?: string;
   suppliers: SupplierOption[];
+  supplierNotAttempted: boolean;
   evidence?: EvidencePackage;
   evidenceLinks: EvidenceLink[];
   sourceUrlUnavailableReason: string;
@@ -351,10 +352,17 @@ function getProductCandidateCommercialSnapshot(
   const opportunityRecord = opportunity as Record<string, unknown> | undefined;
   const evidenceRecord = evidence as Record<string, unknown> | undefined;
 
-  // Market price: check a variety of likely fields on opportunity then evidence
+  // Market price: check opportunity, evidence, then fall back to normalizedProducts
+  const matchedProduct = evidence
+    ? analysis.normalizedProducts.find((p) => p.evidenceRefs?.some((ref) => ref === evidence.evidencePackageId))
+        ?? (opportunity ? analysis.normalizedProducts.find((p) => p.evidenceRefs?.some((ref) => opportunity.evidenceRefs?.includes(ref))) : undefined)
+    : undefined;
+
   const marketPriceRaw = getFirstPresentValue(
     opportunityRecord?.price,
     opportunityRecord?.priceUsd,
+    opportunityRecord?.finalPrice,
+    opportunityRecord?.initialPrice,
     opportunityRecord?.currentPrice,
     opportunityRecord?.currentPriceUsd,
     opportunityRecord?.marketPrice,
@@ -362,7 +370,10 @@ function getProductCandidateCommercialSnapshot(
     opportunityRecord?.estimatedPrice,
     opportunityRecord?.estimatedPriceUsd,
     evidence?.price,
-    evidence?.currentPrice
+    evidence?.currentPrice,
+    // Fall back to normalized product price chain: finalPrice is already resolved into price during normalization
+    matchedProduct?.priceUsd,
+    matchedProduct?.price
   );
 
   const marketPrice = formatMoneyLike(marketPriceRaw, currency);
@@ -434,7 +445,14 @@ function getCommercialSnapshotFromEvidence(evidence: EvidencePackage | undefined
     };
   }
 
-  const marketPriceRaw = getFirstPresentValue((evidence as EvidencePackage).price, (evidence as EvidencePackage).currentPrice);
+  const evidenceRecord = evidence as Record<string, unknown>;
+  const marketPriceRaw = getFirstPresentValue(
+    (evidence as EvidencePackage).price,
+    (evidence as EvidencePackage).currentPrice,
+    evidenceRecord.finalPrice,
+    evidenceRecord.priceUsd,
+    evidenceRecord.initialPrice
+  );
   const marketPrice = formatMoneyLike(marketPriceRaw, currencyUsed);
 
   const supplierPricesFromEvidence = [] as (number | undefined)[];
@@ -653,6 +671,7 @@ function buildPrintableReportHtml(args: {
               commercialHtml = `
                 <div class="report-field"><strong>Market price:</strong> ${escapeHtml(marketPrice ?? "Not available")}</div>
                 <div class="report-field"><strong>Supplier cost:</strong> ${escapeHtml(supplierCostText ?? "Not available")}</div>
+                ${!snapshot.hasSupplierCost ? `<div class="report-field"><em>Margin cannot be estimated until supplier cost is validated.</em></div>` : ""}
                 ${supplierOffers ? `<div class="report-field"><strong>Supplier offers:</strong> ${escapeHtml(supplierOffers)}</div>` : ""}
                 ${delivery ? `<div class="report-field"><strong>Delivery estimate:</strong> ${escapeHtml(delivery)}</div>` : ""}
               `;
@@ -928,9 +947,43 @@ function dataQualityCopy(analysis: AnalysisResult) {
   const fallback = quality.fallbacksUsed.length
     ? `AMI inferred missing signals using ${quality.fallbacksUsed.join(", ")}.`
     : "AMI preserved unknown signals instead of converting missing data to zero.";
-  const validation = quality.missingCriticalFields.length
-    ? `Review ${quality.missingCriticalFields.join(", ")} before acting.`
-    : "Review evidence before acting.";
+  const FIELD_LABELS: Record<string, { label: string; domain: "market" | "supplier" }> = {
+    price:                    { label: "price",                    domain: "market" },
+    reviewsCount:             { label: "review count",             domain: "market" },
+    salesSignal:              { label: "sales signal",             domain: "market" },
+    supplierPrice:            { label: "supplier cost",            domain: "supplier" },
+    estimatedDeliveryDays:    { label: "supplier delivery estimate", domain: "supplier" },
+    supplierAvailability:     { label: "supplier availability",   domain: "supplier" },
+    missing_cost_no_margin_roi: { label: "margin cannot be estimated until supplier cost is validated", domain: "supplier" },
+  };
+
+  const hasSupplierSource = analysis.sourceMode === "live"
+    && (quality.partialSources.some((s) => /supplier|alibaba|aliexpress/i.test(s))
+      || quality.failedSources.some((s) => /supplier|alibaba|aliexpress/i.test(s)));
+
+  const supplierNotAttempted = !hasSupplierSource
+    && !quality.missingCriticalFields.some((f) => FIELD_LABELS[f]?.domain === "supplier" && f !== "missing_cost_no_margin_roi");
+
+  let validation: string;
+  if (supplierNotAttempted) {
+    validation = "Market data was collected, but some source records are incomplete. Supplier-native validation was not attempted, so supplier cost, delivery, and availability still require confirmation before acting.";
+  } else if (quality.missingCriticalFields.length) {
+    const humanize = (f: string) => FIELD_LABELS[f]?.label ?? null;
+    const marketFields = quality.missingCriticalFields
+      .filter((f) => FIELD_LABELS[f]?.domain === "market")
+      .map(humanize).filter((l): l is string => l !== null);
+    const supplierFields = quality.missingCriticalFields
+      .filter((f) => FIELD_LABELS[f]?.domain === "supplier")
+      .map(humanize).filter((l): l is string => l !== null);
+    const unknownFields = quality.missingCriticalFields.filter((f) => !FIELD_LABELS[f]);
+    if (unknownFields.length) marketFields.push("additional data quality fields");
+    const parts: string[] = [];
+    if (marketFields.length) parts.push(`Market data gaps: ${marketFields.join(", ")}.`);
+    if (supplierFields.length) parts.push(`Supplier data gaps: ${supplierFields.join(", ")}.`);
+    validation = (parts.join(" ") || "Review evidence before acting.") + " Confirm these before acting.";
+  } else {
+    validation = "Review evidence before acting.";
+  }
 
   return {
     title: `Data quality: ${quality.status.charAt(0).toUpperCase()}${quality.status.slice(1)}`,
@@ -1416,6 +1469,8 @@ function resolveDrawerDetail(
   const defaultEvidence = analysis.evidencePackages[0];
   const defaultLinks = collectEvidenceLinks(selected, defaultEvidence, analysis);
 
+  const supplierNotAttempted = analysis.supplierOptions.length === 0;
+
   const base: DrawerDetail = {
     rowId: row.id,
     variant: row.variant,
@@ -1427,6 +1482,7 @@ function resolveDrawerDetail(
     confidence: row.confidence,
     risk: row.risk,
     suppliers,
+    supplierNotAttempted,
     evidence: defaultEvidence,
     evidenceLinks: defaultLinks,
     sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, defaultEvidence, selected)
@@ -2265,6 +2321,29 @@ function ActiveTabContent({
     () => deriveInventoryActions(analysis, selected).map((row) => ({ ...row, id: `inventory-${row.id}` })),
     [analysis, selected]
   );
+
+  // Per-supplier count of product candidate rows matched via evidence linking.
+  // Derived from productRows x suppliers — no external data needed.
+  const supplierCatalogMatchCounts = useMemo<Record<string, number>>(() => {
+    const counts: Record<string, number> = {};
+    for (const [index, supplier] of suppliers.entries()) {
+      const supplierId = getSupplierRowId(supplier, index);
+      let count = 0;
+      for (const row of productRows) {
+        const recommendationId = row.id.replace(/^product-/, "");
+        const opportunity = analysis.opportunities.find((o) => o.recommendationId === recommendationId);
+        const evidence = opportunity
+          ? analysis.evidencePackages.find((e) => e.evidencePackageId === opportunity.evidencePackageId)
+          : undefined;
+        if (supplierMatchesCandidate(supplier, opportunity, evidence)) {
+          count += 1;
+        }
+      }
+      counts[supplierId] = count;
+    }
+    return counts;
+  }, [suppliers, productRows, analysis]);
+
   const [drawerDetail, setDrawerDetail] = useState<DrawerDetail | null>(null);
   const [supplierDrawer, setSupplierDrawer] = useState<SupplierDrawerDetail | null>(null);
 
@@ -2392,16 +2471,19 @@ function ActiveTabContent({
           {suppliers.length > 0 ? (
             <SupplierComparisonTable
               suppliers={suppliers}
-              productCandidateCount={productRows.length}
-              selectedProductCount={selectedProductIds.size}
               selectedSupplierIds={selectedSupplierIds}
+              catalogMatchCounts={supplierCatalogMatchCounts}
               onToggleSupplier={handleSupplierToggle}
               onSeeDetails={(supplier, supplierId) =>
                 setSupplierDrawer(resolveSupplierDrawerDetail(supplier, analysis, supplierId))
               }
             />
           ) : (
-            <p className="mt-4 text-sm text-slate-600">Supplier options connected to this analysis will appear here when available.</p>
+            <p className="mt-4 text-sm text-slate-600">
+              {analysis.supplierOptions.length === 0
+                ? "Supplier-native source not attempted. Supplier comparison requires supplier catalog data."
+                : "Supplier options connected to this analysis will appear here when available."}
+            </p>
           )}
         </div>
         {supplierDrawer && (
@@ -2570,7 +2652,7 @@ function SelectablePaginatedTab({
         }
 
         if (title === "Promo Candidates") {
-          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} promo opportunities · ranked by margin potential</p>;
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} promo opportunities · ranked by market signal</p>;
         }
 
         if (title === "Inventory Actions") {
@@ -2803,6 +2885,9 @@ function ItemDetailDrawer({
                     <dl className="mt-2 flex flex-col gap-2">
                       <DrawerField label="Market price" value={snapshot.marketPrice ?? "Not available"} />
                       <DrawerField label="Supplier cost" value={supplierText ?? "Unknown"} />
+                      {!snapshot.hasSupplierCost && (
+                        <p className="mt-1 text-xs text-slate-600">Margin cannot be estimated until supplier cost is validated.</p>
+                      )}
                       {snapshot.supplierOfferCount > 0 && (
                         <DrawerField label="Supplier offers" value={`${snapshot.supplierOfferCount} offer${snapshot.supplierOfferCount === 1 ? "" : "s"}`} />
                       )}
@@ -2858,6 +2943,10 @@ function ItemDetailDrawer({
               <p className="text-sm text-slate-600">Supplier options connected to this analysis</p>
               {detail.suppliers.length > 0 ? (
                 <DrawerSupplierTable suppliers={detail.suppliers} />
+              ) : detail.supplierNotAttempted ? (
+                <p className="mt-3 text-sm text-slate-600">
+                  Supplier-native source not attempted. Supplier cost, delivery, and availability require validation.
+                </p>
               ) : (
                 <p className="mt-3 text-sm text-slate-600">No supplier detail is available for this item yet.</p>
               )}
@@ -2917,13 +3006,19 @@ function DrawerField({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function DrawerSupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
+function DrawerSupplierTable({
+  suppliers,
+  catalogMatchCounts
+}: {
+  suppliers: SupplierOption[];
+  catalogMatchCounts?: Record<string, number>;
+}) {
   return (
     <div className="mt-3 overflow-x-auto">
       <table className="min-w-full border-separate border-spacing-0 text-left text-xs">
         <thead>
           <tr className="uppercase text-slate-500">
-            {["Supplier", "Source", "Unit cost", "Delivery", "Availability", "Match", "Risk"].map((header) => (
+            {["Supplier", "Source", "Catalog Matches", "Delivery", "Availability", "Match", "Risk"].map((header) => (
               <th key={header} className="border-b border-slate-200 px-2 py-2 font-semibold">
                 {header}
               </th>
@@ -2931,17 +3026,26 @@ function DrawerSupplierTable({ suppliers }: { suppliers: SupplierOption[] }) {
           </tr>
         </thead>
         <tbody>
-          {suppliers.map((supplier) => (
-            <tr key={`${supplier.externalId ?? supplier.rawSourceSnapshotId ?? supplier.supplierName}-${supplier.source}`}>
-              <td className="border-b border-slate-100 px-2 py-2 font-semibold text-slate-950">{supplier.supplierName}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.source}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{formatSupplierCost(supplier.estimatedUnitCost)}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.estimatedDeliveryTime}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.availability}</td>
-              <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.matchConfidence}</td>
-              <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.risk}</td>
-            </tr>
-          ))}
+          {suppliers.map((supplier, index) => {
+            const supplierId = getSupplierRowId(supplier, index);
+            const catalogCount = catalogMatchCounts?.[supplierId];
+            const catalogDisplay = catalogCount !== undefined ? String(catalogCount) : "—";
+            const matchLabel = supplier.matchConfidence
+              ? supplier.matchConfidence.charAt(0).toUpperCase() + supplier.matchConfidence.slice(1)
+              : "—";
+
+            return (
+              <tr key={`${supplier.externalId ?? supplier.rawSourceSnapshotId ?? supplier.supplierName}-${supplier.source}`}>
+                <td className="border-b border-slate-100 px-2 py-2 font-semibold text-slate-950">{supplier.supplierName}</td>
+                <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.source}</td>
+                <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{catalogDisplay}</td>
+                <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.estimatedDeliveryTime}</td>
+                <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{supplier.availability}</td>
+                <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{matchLabel}</td>
+                <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{supplier.risk}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -2968,27 +3072,23 @@ function TabHeader({ title, description }: { title: string; description: string 
 
 function SupplierComparisonTable({
   suppliers,
-  productCandidateCount,
-  selectedProductCount,
   selectedSupplierIds,
+  catalogMatchCounts,
   onToggleSupplier,
   onSeeDetails
 }: {
   suppliers: SupplierOption[];
-  productCandidateCount: number;
-  selectedProductCount: number;
   selectedSupplierIds: Set<string>;
+  catalogMatchCounts: Record<string, number>;
   onToggleSupplier: (supplierId: string, checked: boolean) => void;
   onSeeDetails: (supplier: SupplierOption, supplierId: string) => void;
 }) {
-  const itemsCovered = formatItemsCovered(productCandidateCount, selectedProductCount);
-
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
         <thead>
           <tr className="text-xs uppercase text-slate-500">
-            {["Supplier", "Source", "Items covered", "Delivery batch", "Risk", "Action"].map((header) => (
+            {["Supplier", "Source", "Catalog Matches", "Match", "Delivery batch", "Risk", "Action"].map((header) => (
               <th key={header} className="border-b border-slate-200 px-3 py-2 font-semibold">
                 {header}
               </th>
@@ -2998,6 +3098,11 @@ function SupplierComparisonTable({
         <tbody>
           {suppliers.map((supplier, index) => {
             const supplierId = getSupplierRowId(supplier, index);
+            const catalogCount = catalogMatchCounts[supplierId];
+            const catalogDisplay = catalogCount !== undefined ? String(catalogCount) : "—";
+            const matchLabel = supplier.matchConfidence
+              ? supplier.matchConfidence.charAt(0).toUpperCase() + supplier.matchConfidence.slice(1)
+              : "—";
 
             return (
               <tr key={supplierId}>
@@ -3014,7 +3119,8 @@ function SupplierComparisonTable({
                   </div>
                 </td>
                 <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
-                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{itemsCovered}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{catalogDisplay}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{matchLabel}</td>
                 <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
                   {formatDeliveryBatch(supplier.estimatedDeliveryTime)}
                 </td>
@@ -3043,7 +3149,7 @@ function SupplierCandidateProductsTable({ rows }: { rows: SupplierCandidateProdu
       <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
         <thead>
           <tr className="text-xs uppercase text-slate-500">
-            {["Product", "Unit cost", "Delivery", "Match quality"].map((header) => (
+            {["Product", "Delivery", "Match quality"].map((header) => (
               <th key={header} className="border-b border-slate-200 px-2 py-2 font-semibold">
                 {header}
               </th>
@@ -3054,9 +3160,8 @@ function SupplierCandidateProductsTable({ rows }: { rows: SupplierCandidateProdu
           {rows.map((row, index) => (
             <tr key={`${row.productName}-${index}`}>
               <td className="border-b border-slate-100 px-2 py-2 font-medium text-slate-950">{row.productName}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.unitCost}</td>
               <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.delivery}</td>
-              <td className="border-b border-slate-100 px-2 py-2 text-slate-700">{row.matchQuality}</td>
+              <td className="border-b border-slate-100 px-2 py-2 capitalize text-slate-700">{row.matchQuality}</td>
             </tr>
           ))}
         </tbody>

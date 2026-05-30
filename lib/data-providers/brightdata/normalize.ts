@@ -54,7 +54,7 @@ const SUPPLIER_URL_KEYS = [
 ];
 const EXTERNAL_ID_KEYS = ["asin", "sku", "id", "product_id", "productId", "item_id", "itemId", "external_id", "externalId"];
 const RATING_KEYS = ["rating", "stars", "average_rating"];
-const REVIEWS_KEYS = ["reviews_count", "num_ratings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
+const REVIEWS_KEYS = ["reviews_count", "num_ratings", "numRatings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
 const AMAZON_ASIN_PATTERN = /^[A-Z0-9]{10}$/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -183,14 +183,13 @@ function parseNumberFromText(value: unknown) {
 
 function resolvePrice(record: Record<string, unknown>) {
   const buyboxPrices = findNestedRecord(record, "buybox_prices");
-  const direct =
-    findNumber(record, ["final_price"]) ??
-    (buyboxPrices ? findNumber(buyboxPrices, ["final_price", "price", "initial_price"]) : undefined) ??
+  return (
+    findNumber(record, ["finalPrice", "final_price"]) ??
+    (buyboxPrices ? findNumber(buyboxPrices, ["finalPrice", "final_price", "price", "initialPrice", "initial_price"]) : undefined) ??
     findNumber(record, ["sale_price"]) ??
     parseNumberFromText(record.price) ??
-    findNumber(record, ["initial_price"]);
-
-  return direct;
+    findNumber(record, ["priceUsd", "price_usd", "initialPrice", "initial_price"])
+  );
 }
 
 function resolveReviews(record: Record<string, unknown>) {
@@ -202,7 +201,7 @@ function resolveReviews(record: Record<string, unknown>) {
 }
 
 function resolveSalesSignal(record: Record<string, unknown>) {
-  return findNumber(record, ["bought_past_month", "sold"]) ?? parseNumberFromText(record.sold_count);
+  return findNumber(record, ["boughtPastMonth", "bought_past_month", "sold"]) ?? parseNumberFromText(record.sold_count);
 }
 
 function resolveAvailability(record: Record<string, unknown>, price: number | undefined) {
@@ -269,6 +268,8 @@ function resolveDeliveryDays(record: Record<string, unknown>) {
     parseDays(deliveryValue) ??
     parseDays(record.availability_date) ??
     parseDays(record.ships_to) ??
+    parseDays(record.estimatedDeliveryDays) ??
+    parseDays(record.estimatedDeliveryTime) ??
     parseDays(record.deliveryEstimate) ??
     parseDays(record.shipping_time)
   );
