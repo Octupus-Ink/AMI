@@ -14,6 +14,7 @@ type EvidenceTraceOptions = {
   datasetId?: string;
   operation?: string;
   snapshotId?: string;
+  rawSourceSnapshotId?: string;
   rawRef?: string;
   mode?: NormalizedSourceMode;
   assistantTypesUsedBy?: Array<"trend" | "competitor" | "supplier" | "inventory">;
@@ -63,6 +64,18 @@ function normalizedEvidenceMode(mode: SourceMode, override?: NormalizedSourceMod
   return mode === "live" ? "live" : isSourceFallbackMode(mode) ? "fallback_snapshot" : "demo_seed";
 }
 
+function firstHttpUrl(...values: unknown[]) {
+  for (const value of values) {
+    const url = toHttpSourceUrl(value);
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return null;
+}
+
 export function buildEvidencePackages(
   context: MarketContextPayload,
   products: NormalizedProduct[],
@@ -74,7 +87,11 @@ export function buildEvidencePackages(
 ): EvidencePackage[] {
   const primary = products[0];
   const primaryRef = evidenceRefs.find((ref) => primary?.evidenceRefs.includes(ref.id)) ?? evidenceRefs[0];
-  const sourceUrl = toHttpSourceUrl(primaryRef?.url);
+  const sourceUrl = firstHttpUrl(primaryRef?.url, primary?.sourceUrl, primary?.productUrl, primary?.marketplaceUrl);
+  const productUrl = firstHttpUrl(primary?.productUrl, sourceUrl);
+  const marketplaceUrl = firstHttpUrl(primary?.marketplaceUrl, sourceUrl);
+  const supplierUrl = firstHttpUrl(primary?.supplierUrl);
+  const rawSourceSnapshotId = primary?.rawSourceSnapshotId ?? trace.rawSourceSnapshotId ?? trace.snapshotId ?? trace.rawRef;
   const normalizedMode = normalizedEvidenceMode(mode, trace.mode);
   const isFallback = normalizedMode !== "live";
   const sourceType =
@@ -94,6 +111,8 @@ export function buildEvidencePackages(
       ...(trace.runId ? { runId: trace.runId } : {}),
       sourceMarketplace: context.targetMarketplace,
       sourceType,
+      sourceStatus: primary?.dataQuality?.sourceStatus,
+      ...(sourceUrl ? { url: sourceUrl } : {}),
       ...(sourceUrl ? { sourceUrl } : {}),
       sourceProvider: trace.sourceProvider ?? (normalizedMode === "demo_seed" ? "demo" : "brightdata"),
       sourceProduct: trace.sourceProduct ?? brightDataProduct,
@@ -103,7 +122,9 @@ export function buildEvidencePackages(
       datasetId: trace.datasetId,
       operation: trace.operation,
       snapshotId: trace.snapshotId,
-      ...(sourceUrl ? { productUrl: sourceUrl } : {}),
+      ...(productUrl ? { productUrl } : {}),
+      ...(marketplaceUrl ? { marketplaceUrl } : {}),
+      ...(supplierUrl ? { supplierUrl } : {}),
       ...(primary?.imageUrl ? { imageUrl: primary.imageUrl } : {}),
       title: primary?.title ?? context.productName,
       price: primary?.priceUsd ?? primary?.price,
@@ -113,8 +134,10 @@ export function buildEvidencePackages(
       availability: primary?.availability,
       sellerName: primary?.supplierName,
       category: primary?.category,
+      ...(rawSourceSnapshotId ? { rawSourceSnapshotId } : {}),
       ...(trace.rawRef ? { rawRef: trace.rawRef } : {}),
       capturedAt: scrapedAt,
+      lastSeenAt: primary?.lastSeenAt ?? primary?.lastUpdated ?? scrapedAt,
       mode: normalizedMode,
       extractedFields: extractedProductFields(primary as Record<string, unknown> | undefined),
       assistantTypesUsedBy: trace.assistantTypesUsedBy ?? ["trend", "competitor", "supplier", "inventory"],

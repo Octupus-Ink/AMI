@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   FileSearch,
   ShieldAlert,
   X
@@ -12,8 +13,9 @@ import {
 import { PageShell, Section, Surface } from "@/components/layout/PagePrimitives";
 import { BrightDataPill } from "@/components/ui/BrightDataPill";
 import { Badge } from "@/components/ui/Badge";
-import { resolveSourceState, sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
-import type { AnalysisResult, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
+import { resolveSourceState, sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
+import { amiDiagLog, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
+import type { AnalysisResult, EvidenceLink, EvidencePackage, SourceMode, SupplierOption } from "@/lib/schemas/ami";
 import { BusinessGoals, VisibleAssistants } from "@/lib/schemas/ami";
 
 const strategyTabs = [
@@ -32,7 +34,7 @@ function formatMode(mode: SourceMode | string) {
   }
 
   if (mode === "live") {
-    return "Live Bright Data data";
+    return "Live Bright Data sources";
   }
 
   if (mode === "demo") {
@@ -146,6 +148,8 @@ type DrawerDetail = {
   expectedImpact?: string;
   suppliers: SupplierOption[];
   evidence?: EvidencePackage;
+  evidenceLinks: EvidenceLink[];
+  sourceUrlUnavailableReason: string;
 };
 
 type SupplierDrawerDetail = {
@@ -157,6 +161,9 @@ type SupplierDrawerDetail = {
   brightDataProduct?: string;
   brightDataMode?: string;
   riskInputs?: string[];
+  evidenceLinks: EvidenceLink[];
+  sourceUrlUnavailableReason: string;
+  rawRef?: string;
 };
 
 type SupplierCandidateProductRow = {
@@ -215,8 +222,217 @@ function dataQualityCopy(analysis: AnalysisResult) {
 
   return {
     title: `Data quality: ${quality.status.charAt(0).toUpperCase()}${quality.status.slice(1)}`,
-    body: [sourceIssue, fallback, validation].filter(Boolean).join(" ")
+    body: [
+      analysis.sourceMode === "live"
+        ? "Live sources collected, but data quality is degraded because source records were incomplete."
+        : "",
+      sourceIssue,
+      fallback,
+      validation
+    ].filter(Boolean).join(" ")
   };
+}
+
+function evidenceLinkSourceType(sourceName: string | undefined, fallback: EvidenceLink["sourceType"]): EvidenceLink["sourceType"] {
+  const normalized = sourceName?.toLowerCase() ?? "";
+
+  if (normalized.includes("supplier") || normalized.includes("alibaba") || normalized.includes("aliexpress")) {
+    return "supplier";
+  }
+
+  if (normalized.includes("trend") || normalized.includes("tiktok") || normalized.includes("facebook")) {
+    return "trend";
+  }
+
+  if (normalized.includes("search") || normalized.includes("unlocker") || normalized.includes("serp")) {
+    return "search";
+  }
+
+  return fallback;
+}
+
+function sourceStatusTone(status: EvidenceLink["sourceStatus"] | undefined) {
+  if (status === "success") {
+    return "green";
+  }
+
+  if (status === "failed") {
+    return "red";
+  }
+
+  if (status === "partial" || status === "empty") {
+    return "amber";
+  }
+
+  return "neutral";
+}
+
+function linkLabelForSourceType(sourceType: EvidenceLink["sourceType"]) {
+  if (sourceType === "supplier") {
+    return "View supplier source";
+  }
+
+  if (sourceType === "trend") {
+    return "Open trend evidence";
+  }
+
+  if (sourceType === "search") {
+    return "Open marketplace search";
+  }
+
+  if (sourceType === "raw_snapshot") {
+    return "Open evidence";
+  }
+
+  return "Review listing";
+}
+
+function collectEvidenceLinks(
+  recommendation: AnalysisResult["executiveRecommendation"] | undefined,
+  evidence: EvidencePackage | undefined,
+  analysis: AnalysisResult
+): EvidenceLink[] {
+  const links: EvidenceLink[] = [];
+  const seen = new Set<string>();
+  const rawSourceSnapshotId = evidence?.rawSourceSnapshotId ?? evidence?.rawRef;
+
+  function add(input: {
+    label?: string;
+    url?: string | null;
+    sourceName?: string;
+    sourceType: EvidenceLink["sourceType"];
+    sourceStatus?: EvidenceLink["sourceStatus"];
+    lastSeenAt?: string;
+    rawSourceSnapshotId?: string;
+  }) {
+    const url = toHttpSourceUrl(input.url);
+
+    if (!url || seen.has(url)) {
+      return;
+    }
+
+    seen.add(url);
+    links.push({
+      label: input.label ?? linkLabelForSourceType(input.sourceType),
+      url,
+      sourceName: input.sourceName ?? evidence?.sourceName ?? evidence?.sourceMarketplace ?? "Source evidence",
+      sourceType: input.sourceType,
+      sourceStatus: input.sourceStatus,
+      lastSeenAt: input.lastSeenAt ?? evidence?.lastSeenAt ?? evidence?.scrapedAt,
+      rawSourceSnapshotId: input.rawSourceSnapshotId ?? rawSourceSnapshotId
+    });
+  }
+
+  for (const link of [...(recommendation?.evidenceLinks ?? []), ...(recommendation?.sourceUrls ?? [])]) {
+    add(link);
+  }
+
+  if (evidence) {
+    const sourceType = evidenceLinkSourceType(evidence.sourceName ?? evidence.sourceType, "marketplace");
+
+    add({
+      url: evidence.productUrl ?? evidence.marketplaceUrl ?? evidence.sourceUrl ?? evidence.url,
+      sourceName: evidence.sourceName ?? evidence.sourceMarketplace,
+      sourceType,
+      sourceStatus: evidence.sourceStatus,
+      lastSeenAt: evidence.lastSeenAt ?? evidence.scrapedAt,
+      rawSourceSnapshotId
+    });
+    add({
+      url: evidence.supplierUrl,
+      sourceName: evidence.sellerName ?? evidence.sourceName ?? analysis.marketContext.supplierSource,
+      sourceType: "supplier",
+      sourceStatus: evidence.sourceStatus,
+      lastSeenAt: evidence.lastSeenAt ?? evidence.scrapedAt,
+      rawSourceSnapshotId
+    });
+  }
+
+  const recommendationEvidenceIds = new Set(recommendation?.evidenceRefs ?? []);
+  for (const ref of analysis.evidenceRefs) {
+    if (recommendationEvidenceIds.size > 0 && !recommendationEvidenceIds.has(ref.id)) {
+      continue;
+    }
+
+    add({
+      label: "Open evidence",
+      url: ref.url,
+      sourceName: ref.sourceType || ref.source,
+      sourceType: evidenceLinkSourceType(ref.sourceType, "search"),
+      lastSeenAt: ref.collectedAt,
+      rawSourceSnapshotId
+    });
+  }
+
+  for (const proof of analysis.sourceCollectionStatus.sourceProof ?? []) {
+    add({
+      label: "Open evidence",
+      url: proof.sourceUrl,
+      sourceName: proof.sourceType,
+      sourceType: evidenceLinkSourceType(proof.sourceType, proof.isFallback ? "raw_snapshot" : "search"),
+      lastSeenAt: proof.collectedAt,
+      rawSourceSnapshotId
+    });
+  }
+
+  return links;
+}
+
+function sourceUrlUnavailableReason(
+  analysis: AnalysisResult,
+  evidence: EvidencePackage | undefined,
+  recommendation?: AnalysisResult["executiveRecommendation"]
+) {
+  const quality = analysis.dataQualitySummary ?? recommendation?.dataQuality ?? analysis.executiveRecommendation.dataQuality;
+  const mode = evidence?.brightDataMode ?? analysis.sourceMode;
+
+  if (evidence?.isFallback || analysis.fallbackUsed || mode === "fallback" || mode === "fallback_snapshot") {
+    return "Source URL unavailable. AMI used fallback or preserved snapshot evidence, so a public listing URL was not available for this item.";
+  }
+
+  if (mode === "demo" || mode === "demo_seed" || mode === "demo_fallback" || mode === "demo_snapshot") {
+    return "Source URL unavailable. This recommendation came from demo seed evidence, not a live marketplace listing.";
+  }
+
+  if (quality?.partialSources.length || quality?.missingCriticalFields.length || quality?.status === "partial" || quality?.status === "degraded") {
+    return "Source URL unavailable. AMI received partial source data for this evidence item, so the original listing link was not available.";
+  }
+
+  if (evidence?.rawRef) {
+    return "Source URL unavailable. AMI preserved a raw source snapshot reference, but the provider did not return a public listing URL.";
+  }
+
+  return "Source URL unavailable. The normalized evidence package is missing a source URL.";
+}
+
+function supplierEvidenceLinks(supplier: SupplierOption, analysis: AnalysisResult, evidence: EvidencePackage | undefined) {
+  const baseLinks = collectEvidenceLinks(analysis.executiveRecommendation, evidence, analysis);
+  const supplierLinks: EvidenceLink[] = [];
+  const seen = new Set<string>();
+
+  function add(url: string | undefined, label: string, sourceType: EvidenceLink["sourceType"]) {
+    const safeUrl = toHttpSourceUrl(url);
+
+    if (!safeUrl || seen.has(safeUrl)) {
+      return;
+    }
+
+    seen.add(safeUrl);
+    supplierLinks.push({
+      label,
+      url: safeUrl,
+      sourceName: supplier.supplierName,
+      sourceType,
+      lastSeenAt: supplier.lastSeenAt ?? evidence?.lastSeenAt ?? evidence?.scrapedAt,
+      rawSourceSnapshotId: supplier.rawSourceSnapshotId ?? evidence?.rawSourceSnapshotId ?? evidence?.rawRef
+    });
+  }
+
+  add(supplier.supplierUrl, "View supplier source", "supplier");
+  add(supplier.productUrl, "Review listing", "marketplace");
+  add(supplier.sourceUrl, "Open evidence", evidenceLinkSourceType(supplier.source, "search"));
+
+  return supplierLinks.length ? supplierLinks : baseLinks.filter((link) => link.sourceType === "supplier" || link.sourceType === "marketplace");
 }
 
 function formatPromoMeta(input: PromoMetaInput) {
@@ -446,6 +662,7 @@ function resolveDrawerDetail(
   const sourceMode = formatMode(analysis.sourceCollectionStatus.mode);
   const { category, productName, targetMarketplace } = analysis.marketContext;
   const defaultEvidence = analysis.evidencePackages[0];
+  const defaultLinks = collectEvidenceLinks(selected, defaultEvidence, analysis);
 
   const base: DrawerDetail = {
     rowId: row.id,
@@ -458,7 +675,9 @@ function resolveDrawerDetail(
     confidence: row.confidence,
     risk: row.risk,
     suppliers,
-    evidence: defaultEvidence
+    evidence: defaultEvidence,
+    evidenceLinks: defaultLinks,
+    sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, defaultEvidence, selected)
   };
 
   if (row.id.startsWith("product-")) {
@@ -467,6 +686,7 @@ function resolveDrawerDetail(
     const evidence = opportunity
       ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
       : defaultEvidence;
+    const evidenceLinks = collectEvidenceLinks(opportunity, evidence, analysis);
 
     return {
       ...base,
@@ -478,7 +698,9 @@ function resolveDrawerDetail(
       suggestedNextStep: opportunity?.suggestedNextStep,
       whyItMatters: opportunity?.primaryReason ?? row.summary,
       expectedImpact: opportunity ? `${opportunity.matchQuality} match · ${opportunity.signalStrength} signal` : undefined,
-      evidence
+      evidence,
+      evidenceLinks,
+      sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, evidence, opportunity)
     };
   }
 
@@ -488,6 +710,7 @@ function resolveDrawerDetail(
 
     if (opportunity) {
       const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId);
+      const evidenceLinks = collectEvidenceLinks(opportunity, evidence, analysis);
 
       return {
         ...base,
@@ -500,7 +723,9 @@ function resolveDrawerDetail(
         suggestedNextStep: opportunity.suggestedNextStep,
         whyItMatters: opportunity.primaryReason,
         expectedImpact: `${opportunity.matchQuality} match · ${opportunity.signalStrength} signal`,
-        evidence
+        evidence,
+        evidenceLinks,
+        sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, evidence, opportunity)
       };
     }
 
@@ -683,6 +908,7 @@ function resolveSupplierDrawerDetail(
   supplierId: string
 ): SupplierDrawerDetail {
   const evidence = analysis.evidencePackages[0];
+  const evidenceLinks = supplierEvidenceLinks(supplier, analysis, evidence);
 
   return {
     supplierId,
@@ -692,7 +918,10 @@ function resolveSupplierDrawerDetail(
     supplierPrice: evidence?.supplierPrice,
     brightDataProduct: evidence?.brightDataProduct,
     brightDataMode: evidence ? formatMode(evidence.brightDataMode) : undefined,
-    riskInputs: evidence?.riskInputs
+    riskInputs: evidence?.riskInputs,
+    evidenceLinks,
+    sourceUrlUnavailableReason: sourceUrlUnavailableReason(analysis, evidence, analysis.executiveRecommendation),
+    rawRef: evidence?.rawRef
   };
 }
 
@@ -748,17 +977,51 @@ export function RecommendationsClient() {
 
   useEffect(() => {
     async function load() {
+      const requestId = createDiagRequestId("recommendations_load");
       const params = new URLSearchParams(window.location.search);
       const runId = params.get("runId");
       const cached = window.localStorage.getItem("ami.latestAnalysis");
+      let cachedRunId: string | undefined;
+
+      if (cached) {
+        try {
+          cachedRunId = (JSON.parse(cached) as AnalysisResult).analysisRunId;
+        } catch {
+          cachedRunId = undefined;
+        }
+      }
+
+      amiDiagLog("recommendations_load_started", {
+        requestId,
+        route: "/recommendations",
+        runIdFromUrl: runId,
+        runIdFromLocalStorage: cachedRunId
+      });
 
       if (runId) {
         const response = await fetch(`/api/analysis/${runId}`);
+        amiDiagLog("recommendations_run_fetch_response", {
+          requestId,
+          route: `/api/analysis/${runId}`,
+          runIdFromUrl: runId,
+          responseStatus: response.status,
+          ok: response.ok
+        });
 
         if (response.ok) {
           const result = (await response.json()) as AnalysisResult;
           setAnalysis(result);
           setSelectedId(result.executiveRecommendation.recommendationId);
+          amiDiagLog("recommendations_latest_run_loaded", {
+            requestId,
+            analysisRunId: result.analysisRunId,
+            route: "/recommendations",
+            latestRunLoaded: true,
+            recommendationSource: "api_run_id",
+            sourceMode: result.sourceMode,
+            usedFallback: result.fallbackUsed,
+            dataQualityStatus: result.dataQualitySummary?.status
+          });
           return;
         }
       }
@@ -767,9 +1030,26 @@ export function RecommendationsClient() {
         const result = JSON.parse(cached) as AnalysisResult;
         setAnalysis(result);
         setSelectedId(result.executiveRecommendation.recommendationId);
+        amiDiagLog("recommendations_latest_run_loaded", {
+          requestId,
+          analysisRunId: result.analysisRunId,
+          route: "/recommendations",
+          latestRunLoaded: true,
+          runIdFromUrl: runId,
+          runIdFromLocalStorage: result.analysisRunId,
+          recommendationSource: "localStorage_fallback",
+          sourceMode: result.sourceMode,
+          usedFallback: result.fallbackUsed,
+          dataQualityStatus: result.dataQualitySummary?.status
+        });
         return;
       }
 
+      amiDiagLog("recommendations_no_run_available", {
+        requestId,
+        route: "/recommendations",
+        latestRunLoaded: false
+      });
       router.push("/market-context-setup");
     }
 
@@ -790,6 +1070,8 @@ export function RecommendationsClient() {
 
   const sourceState = sourceStateForAnalysis(analysis);
   const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === selected.evidencePackageId);
+  const selectedEvidenceLinks = collectEvidenceLinks(selected, evidence, analysis);
+  const selectedSourceUnavailableReason = sourceUrlUnavailableReason(analysis, evidence, selected);
   const suppliers = analysis.supplierOptions?.length ? analysis.supplierOptions : fallbackSupplierOptions(analysis);
   const strategySignals =
     analysis.assistantFindings.length > 0
@@ -915,7 +1197,7 @@ export function RecommendationsClient() {
         </div>
       </Section>
 
-   {qualityNotice && (
+      {qualityNotice && (
         <section className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <ShieldAlert className="mt-1 text-amber-800" size={20} />
@@ -926,6 +1208,14 @@ export function RecommendationsClient() {
           </div>
         </section>
       )}
+
+      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+        <EvidenceLinksPanel
+          links={selectedEvidenceLinks}
+          unavailableReason={selectedSourceUnavailableReason}
+          rawRef={evidence?.rawRef}
+        />
+      </section>
   
       <Section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1010,20 +1300,64 @@ export function RecommendationsClient() {
   );//<----aqui
 }
 
+function EvidenceLinksPanel({
+  links,
+  unavailableReason,
+  rawRef
+}: {
+  links: EvidenceLink[];
+  unavailableReason: string;
+  rawRef?: string;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">Evidence / Source links</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">Reviewable source references tied to this recommendation.</p>
+        </div>
+        <FileSearch size={18} className="text-slate-500" />
+      </div>
+
+      {links.length > 0 ? (
+        <div className="mt-3 flex flex-col gap-2">
+          {links.map((link) => (
+            <a
+              key={`${link.url}-${link.label}`}
+              href={link.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="group flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm transition hover:border-teal-300 hover:bg-teal-50"
+            >
+              <span className="min-w-0">
+                <span className="block font-semibold text-teal-800 group-hover:text-teal-950">{safeDisplay(link.label, 80)}</span>
+                <span className="mt-0.5 block break-all text-xs leading-5 text-slate-600">{safeDisplay(link.sourceName, 120)}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                {link.sourceStatus && <Badge tone={sourceStatusTone(link.sourceStatus)}>{link.sourceStatus}</Badge>}
+                <ExternalLink size={15} className="text-teal-700" />
+              </span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-slate-700">{unavailableReason}</p>
+      )}
+
+      {rawRef && (
+        <p className="mt-3 break-all text-xs leading-5 text-slate-500">
+          Raw source snapshot reference: {safeDisplay(rawRef, 220)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Counter({ label, value }: { label: string; value: number }) {
   return (
     <div className="min-w-36 border-l-2 border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-slate-950">{value}</p>
-    </div>
-  );
-}
-
-function MetricLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-2 last:border-b-0 last:pb-0">
-      <dt className="text-slate-600">{label}</dt>
-      <dd className="font-semibold text-slate-950">{value}</dd>
     </div>
   );
 }
@@ -1238,18 +1572,27 @@ function ActiveTabContent({
           <FileSearch size={18} />
         </summary>
         {evidence ? (
-          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
-            <Comparison label="Product identity" value={evidence.productIdentity} />
-            <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
-            <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
-            <Comparison label="Bright Data product" value={evidence.brightDataProduct} />
-            <Comparison label="Current price" value={formatNullableMoney(evidence.currentPrice)} />
-            <Comparison label="Supplier price" value={formatNullableMoney(evidence.supplierPrice)} />
-            <Comparison label="Matched attributes" value={evidence.matchedAttributes.join(", ")} />
-            <Comparison label="Demand indicators" value={evidence.demandIndicators.join(", ")} />
-            <Comparison label="Risk inputs" value={evidence.riskInputs.join(", ")} />
-            <Comparison label="Evidence package" value={evidence.evidencePackageId} />
-          </div>
+          <>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+              <EvidenceLinksPanel
+                links={collectEvidenceLinks(selected, evidence, analysis)}
+                unavailableReason={sourceUrlUnavailableReason(analysis, evidence, selected)}
+                rawRef={evidence.rawRef}
+              />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
+              <Comparison label="Product identity" value={evidence.productIdentity} />
+              <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
+              <Comparison label="Source mode" value={formatMode(evidence.brightDataMode)} />
+              <Comparison label="Bright Data product" value={evidence.brightDataProduct} />
+              <Comparison label="Current price" value={formatNullableMoney(evidence.currentPrice)} />
+              <Comparison label="Supplier price" value={formatNullableMoney(evidence.supplierPrice)} />
+              <Comparison label="Matched attributes" value={evidence.matchedAttributes.join(", ")} />
+              <Comparison label="Demand indicators" value={evidence.demandIndicators.join(", ")} />
+              <Comparison label="Risk inputs" value={evidence.riskInputs.join(", ")} />
+              <Comparison label="Evidence package" value={evidence.evidencePackageId} />
+            </div>
+          </>
         ) : (
           <p className="mt-4 text-sm text-slate-600">Assistant reasoning, source evidence, product match, and technical details will appear here.</p>
         )}
@@ -1592,6 +1935,13 @@ function ItemDetailDrawer({
                   <div className="mb-3">
                     <BrightDataPill />
                   </div>
+                  <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+                    <EvidenceLinksPanel
+                      links={detail.evidenceLinks}
+                      unavailableReason={detail.sourceUrlUnavailableReason}
+                      rawRef={detail.evidence.rawRef}
+                    />
+                  </div>
                   <dl className="flex flex-col gap-2">
                     <DrawerField label="Source marketplace" value={detail.evidence.sourceMarketplace} />
                     <DrawerField label="Source mode" value={formatMode(detail.evidence.brightDataMode)} />
@@ -1897,6 +2247,13 @@ function SupplierDetailDrawer({
                 </>
               )}
             </dl>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <EvidenceLinksPanel
+                links={detail.evidenceLinks}
+                unavailableReason={detail.sourceUrlUnavailableReason}
+                rawRef={detail.rawRef}
+              />
+            </div>
           </section>
 
           <section className="mt-6 border-t border-slate-100 pt-5">

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { connectToDatabase } from "@/lib/db/mongoose";
+import { briefingFingerprint } from "@/lib/diagnostics/ami-diag";
 import {
   demoAssistantUsage,
   demoCredits,
@@ -969,6 +970,64 @@ export async function getAnalysisResult(workspaceId: string, analysisRunId: stri
   return getDemoStore().analysisResults.find(
     (result) => result.workspaceId === workspaceId && result.analysisRunId === analysisRunId
   ) ?? null;
+}
+
+const activeAnalysisStatuses = new Set<AnalysisResult["status"]>([
+  "pending",
+  "created",
+  "collecting_data",
+  "normalizing_data",
+  "metrics_ready",
+  "agents_running",
+  "synthesizing",
+  "generating_verdict",
+  "running"
+]);
+
+const reusableRecentAnalysisStatuses = new Set<AnalysisResult["status"]>([
+  ...activeAnalysisStatuses,
+  "completed",
+  "completed_with_fallback"
+]);
+
+function isRecentReusableAnalysis(result: AnalysisResult, now: number, maxAgeMs: number) {
+  const startedAt = Date.parse(result.startedAt);
+  const ageMs = Number.isFinite(startedAt) ? now - startedAt : Number.POSITIVE_INFINITY;
+
+  return reusableRecentAnalysisStatuses.has(result.status) && ageMs >= 0 && ageMs <= maxAgeMs;
+}
+
+export async function findRecentAnalysisByBriefingFingerprint(
+  workspaceId: string,
+  fingerprint: string,
+  maxAgeMs = 10 * 60 * 1000
+) {
+  const now = Date.now();
+
+  if (await databaseReady()) {
+    const runs = (await AnalysisRun.find({ workspaceId })
+      .sort({ "data.startedAt": -1 })
+      .limit(25)
+      .lean()) as Array<{ data?: AnalysisResult }>;
+
+    return runs
+      .map((run) => run.data)
+      .filter((result): result is AnalysisResult => Boolean(result))
+      .find(
+        (result) =>
+          isRecentReusableAnalysis(result, now, maxAgeMs) &&
+          briefingFingerprint(result.marketContext, workspaceId) === fingerprint
+      ) ?? null;
+  }
+
+  return getDemoStore()
+    .analysisResults.filter((result) => result.workspaceId === workspaceId)
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+    .find(
+      (result) =>
+        isRecentReusableAnalysis(result, now, maxAgeMs) &&
+        briefingFingerprint(result.marketContext, workspaceId) === fingerprint
+    ) ?? null;
 }
 
 async function updateAssistantUsageAfterRun(workspaceId: string, result: AnalysisResult) {

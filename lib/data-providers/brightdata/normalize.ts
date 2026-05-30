@@ -9,9 +9,53 @@ import type { BrightDataPayloadContext, BrightDataProduct } from "@/lib/data-pro
 const PRODUCT_ARRAY_KEYS = ["products", "results", "items", "data", "records", "organic", "shopping_results"];
 const PRICE_KEYS = ["final_price", "buybox_final_price", "sale_price", "price", "price_usd", "currentPrice", "current_price", "initial_price", "value"];
 const TITLE_KEYS = ["title", "name", "product_title", "productName", "product_name", "item_title"];
-const URL_KEYS = ["url", "link", "product_url", "sourceUrl"];
+const URL_KEYS = [
+  "url",
+  "link",
+  "href",
+  "sourceUrl",
+  "source_url",
+  "productUrl",
+  "product_url",
+  "canonicalUrl",
+  "canonical_url",
+  "itemUrl",
+  "item_url",
+  "listingUrl",
+  "listing_url",
+  "marketplaceUrl",
+  "marketplace_url",
+  "externalUrl",
+  "external_url",
+  "evidenceUrl",
+  "evidence_url",
+  "sourceHref",
+  "source_href",
+  "postUrl",
+  "post_url",
+  "profileUrl",
+  "profile_url"
+];
+const SUPPLIER_URL_KEYS = [
+  "supplierUrl",
+  "supplier_url",
+  "sellerUrl",
+  "seller_url",
+  "shopUrl",
+  "shop_url",
+  "storeUrl",
+  "store_url",
+  "merchantUrl",
+  "merchant_url",
+  "vendorUrl",
+  "vendor_url",
+  "profileUrl",
+  "profile_url"
+];
+const EXTERNAL_ID_KEYS = ["asin", "sku", "id", "product_id", "productId", "item_id", "itemId", "external_id", "externalId"];
 const RATING_KEYS = ["rating", "stars", "average_rating"];
 const REVIEWS_KEYS = ["reviews_count", "num_ratings", "item_reviews", "reviews", "reviewsCount", "ratings_count", "review_count"];
+const AMAZON_ASIN_PATTERN = /^[A-Z0-9]{10}$/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -27,6 +71,30 @@ function findString(record: Record<string, unknown>, keys: string[]) {
   }
 
   return undefined;
+}
+
+function resolveAmazonProductUrl(record: Record<string, unknown>, context: MarketContextPayload) {
+  const marketplaceText = `${context.targetMarketplace} ${context.region}`.toLowerCase();
+
+  if (!marketplaceText.includes("amazon")) {
+    return null;
+  }
+
+  const asin = findString(record, ["asin", "ASIN"]);
+
+  if (!asin || !AMAZON_ASIN_PATTERN.test(asin)) {
+    return null;
+  }
+
+  return `https://www.amazon.com/dp/${asin.toUpperCase()}`;
+}
+
+function resolveSourceUrl(record: Record<string, unknown>, context: MarketContextPayload) {
+  return toHttpSourceUrl(findString(record, URL_KEYS)) ?? resolveAmazonProductUrl(record, context);
+}
+
+function resolveSupplierUrl(record: Record<string, unknown>) {
+  return toHttpSourceUrl(findString(record, SUPPLIER_URL_KEYS));
 }
 
 function findNumber(record: Record<string, unknown>, keys: string[]) {
@@ -288,7 +356,7 @@ function evidenceForProduct(
   collectedAt: string
 ): EvidenceRef {
   const title = sanitizeEvidenceTitle(findString(record, TITLE_KEYS), context.productName);
-  const url = toHttpSourceUrl(findString(record, URL_KEYS));
+  const url = resolveSourceUrl(record, context);
   const snippetSource =
     findString(record, ["description", "snippet", "text", "about"]) ??
     `${title} observed through ${product} for ${context.targetMarketplace}.`;
@@ -332,6 +400,8 @@ function normalizeRecord(
   const estimatedDeliveryDays = resolveDeliveryDays(record) ?? null;
   const { brand, brandConfidence } = resolveBrand(record, title);
   const categoryPath = resolveCategoryPath(record, context);
+  const sourceUrl = evidenceRef.url;
+  const supplierUrl = resolveSupplierUrl(record);
   const missingFields = [
     price === undefined ? "price" : "",
     reviewsCount === undefined ? "reviewsCount" : "",
@@ -341,7 +411,10 @@ function normalizeRecord(
 
   return NormalizedProductSchema.parse({
     source: product,
-    externalId: findString(record, ["asin", "sku", "id", "product_id"]) ?? `${product.toLowerCase().replace(/\s+/g, "_")}_${index + 1}`,
+    externalId: findString(record, EXTERNAL_ID_KEYS) ?? `${product.toLowerCase().replace(/\s+/g, "_")}_${index + 1}`,
+    ...(sourceUrl ? { sourceUrl, productUrl: sourceUrl, marketplaceUrl: sourceUrl } : {}),
+    ...(supplierUrl ? { supplierUrl } : {}),
+    lastSeenAt: collectedAt,
     title,
     canonicalTitle: canonicalize(title),
     brand,
@@ -450,6 +523,7 @@ export function createFallbackProducts(context: MarketContextPayload, collectedA
         estimatedMargin,
         riskScore: clamp((pricePressure + inventoryRisk) / 2),
         confidence: index > 2 ? 0.62 : 0.78,
+        lastSeenAt: collectedAt,
         lastUpdated: collectedAt,
         evidenceRefs: [evidence.id],
         dataQuality: {

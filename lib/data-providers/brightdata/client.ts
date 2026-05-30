@@ -4,6 +4,7 @@ import type { MarketContextPayload } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import type { NormalizedProduct } from "@/lib/schemas/ami";
 import { sanitizeEvidenceSnippet } from "@/lib/analysis/source-state";
+import { amiDiagLog, briefingDiagFields, createDiagRequestId } from "@/lib/diagnostics/ami-diag";
 import { createFallbackProducts, normalizeBrightDataPayload } from "@/lib/data-providers/brightdata/normalize";
 import {
   buildMarketplaceSearchUrl,
@@ -23,6 +24,20 @@ type BrightDataAttemptResult = {
   attempt: BrightDataAttempt;
   products?: NormalizedProduct[];
   evidenceRefs?: EvidenceRef[];
+};
+
+type BrightDataDiagnostics = {
+  requestId?: string;
+  analysisRunId?: string;
+  briefingFingerprint?: string;
+};
+
+type BrightDataRequestDiagnostics = BrightDataDiagnostics & {
+  sourceName: string;
+  inputKeyword?: string;
+  normalizedKeyword?: string;
+  targetMarketplace?: string;
+  category?: string;
 };
 
 type FallbackSnapshot = {
@@ -137,6 +152,18 @@ function safeError(error: unknown) {
   return "Unknown Bright Data error";
 }
 
+function brightDataDiagFields(context: MarketContextPayload, diagnostics: BrightDataDiagnostics = {}) {
+  const briefing = briefingDiagFields(context);
+
+  return {
+    ...briefing,
+    requestId: diagnostics.requestId ?? createDiagRequestId("brightdata"),
+    analysisRunId: diagnostics.analysisRunId,
+    briefingFingerprint: diagnostics.briefingFingerprint ?? briefing.briefingFingerprint,
+    sourceRole: "marketplace_demand"
+  };
+}
+
 function sourceNameForProduct(product: BrightDataProduct, context: MarketContextPayload) {
   const marketplace = marketplaceKeyForContext(context);
 
@@ -168,7 +195,23 @@ function normalizedStatus(products: NormalizedProduct[]): "success" | "partial" 
   return missingCritical ? "partial" : "success";
 }
 
-function loadFallbackSnapshot(context: MarketContextPayload, collectedAt: string, maxResults: number): FallbackSnapshot | null {
+function categoryFitForProduct(context: MarketContextPayload, product: NormalizedProduct | undefined) {
+  const requested = context.category.trim().toLowerCase();
+  const candidate = product?.category?.trim().toLowerCase() ?? "";
+
+  if (!requested || !candidate) {
+    return null;
+  }
+
+  return requested.includes(candidate) || candidate.includes(requested) ? 0.9 : 0.45;
+}
+
+function loadFallbackSnapshot(
+  context: MarketContextPayload,
+  collectedAt: string,
+  maxResults: number,
+  diagnostics?: BrightDataDiagnostics
+): FallbackSnapshot | null {
   const candidate = FALLBACK_RAW_SNAPSHOTS.find((snapshot) => snapshot.marketplace === marketplaceKeyForContext(context));
 
   if (!candidate) {
@@ -194,6 +237,26 @@ function loadFallbackSnapshot(context: MarketContextPayload, collectedAt: string
       return null;
     }
 
+    const primary = normalized.products[0];
+    const productFamilyFit = primary.matchConfidence ?? 0;
+    const categoryFit = categoryFitForProduct(context, primary);
+
+    if (productFamilyFit < 0.65 || (categoryFit !== null && categoryFit < 0.5)) {
+      amiDiagLog("brightdata_fallback_snapshot_rejected", {
+        ...brightDataDiagFields(context, diagnostics),
+        sourceName: candidate.sourceName,
+        sourceStatus: "failed",
+        fallbackReason: "preserved_snapshot_low_briefing_fit",
+        candidateTitle: primary.title,
+        candidateCategory: primary.category,
+        productFamilyFit,
+        categoryFit,
+        recordCount: normalized.products.length,
+        rawSourceSnapshotId: candidate.ref
+      });
+      return null;
+    }
+
     return {
       ref: candidate.ref,
       sourceName: candidate.sourceName,
@@ -212,12 +275,26 @@ async function requestJson(
   apiKey: string,
   body: Record<string, unknown> | undefined,
   timeoutMs: number,
-  method: "GET" | "POST" = "POST"
+  method: "GET" | "POST" = "POST",
+  diagnostics?: BrightDataRequestDiagnostics
 ) {
   const controller = new AbortController();
+  const startedAt = Date.now();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    amiDiagLog("brightdata_request_started", {
+      requestId: diagnostics?.requestId,
+      analysisRunId: diagnostics?.analysisRunId,
+      briefingFingerprint: diagnostics?.briefingFingerprint,
+      sourceName: diagnostics?.sourceName,
+      sourceRole: "marketplace_demand",
+      inputKeyword: diagnostics?.inputKeyword,
+      normalizedKeyword: diagnostics?.normalizedKeyword,
+      category: diagnostics?.category,
+      targetMarketplace: diagnostics?.targetMarketplace,
+      startedAt: new Date(startedAt).toISOString()
+    });
     const response = await fetch(endpoint, {
       method,
       headers: {
@@ -235,7 +312,32 @@ async function requestJson(
       throw new Error(`HTTP ${response.status}: ${typeof payload === "string" ? payload.slice(0, 160) : "Bright Data request failed"}`);
     }
 
+    amiDiagLog("brightdata_request_completed", {
+      requestId: diagnostics?.requestId,
+      analysisRunId: diagnostics?.analysisRunId,
+      briefingFingerprint: diagnostics?.briefingFingerprint,
+      sourceName: diagnostics?.sourceName,
+      sourceRole: "marketplace_demand",
+      sourceStatus: "success",
+      responseStatus: response.status,
+      ok: true,
+      durationMs: Date.now() - startedAt
+    });
     return payload;
+  } catch (error) {
+    const message = safeError(error);
+    amiDiagLog(controller.signal.aborted ? "brightdata_request_aborted" : "brightdata_request_failed", {
+      requestId: diagnostics?.requestId,
+      analysisRunId: diagnostics?.analysisRunId,
+      briefingFingerprint: diagnostics?.briefingFingerprint,
+      sourceName: diagnostics?.sourceName,
+      sourceRole: "marketplace_demand",
+      sourceStatus: "failed",
+      abortReason: controller.signal.aborted ? "timeout_or_controller_abort" : undefined,
+      errorMessage: message,
+      durationMs: Date.now() - startedAt
+    });
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -279,7 +381,7 @@ function findSnapshotId(value: unknown): string | undefined {
   return undefined;
 }
 
-async function pollSnapshotPayload(snapshotId: string, config: BrightDataConfig) {
+async function pollSnapshotPayload(snapshotId: string, config: BrightDataConfig, diagnostics?: BrightDataRequestDiagnostics) {
   if (!config.webScraperProgressEndpoint) {
     return null;
   }
@@ -287,7 +389,10 @@ async function pollSnapshotPayload(snapshotId: string, config: BrightDataConfig)
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const url = new URL(config.webScraperProgressEndpoint);
     url.searchParams.set("snapshot_id", snapshotId);
-    const payload = await requestJson(url.toString(), config.apiKey ?? "", undefined, config.timeoutMs, "GET");
+    const payload = await requestJson(url.toString(), config.apiKey ?? "", undefined, config.timeoutMs, "GET", {
+      ...diagnostics,
+      sourceName: `${diagnostics?.sourceName ?? "Bright Data snapshot"} progress`
+    });
 
     if (normalizeBrightDataPayload(payload, {
       context: {
@@ -316,9 +421,11 @@ async function pollSnapshotPayload(snapshotId: string, config: BrightDataConfig)
 async function attemptStructuredScraper(
   context: MarketContextPayload,
   config: BrightDataConfig,
-  collectedAt: string
+  collectedAt: string,
+  diagnostics: BrightDataDiagnostics = {}
 ): Promise<BrightDataAttemptResult> {
   const operation = resolveBrightDataOperation(context, config);
+  const diag = brightDataDiagFields(context, diagnostics);
 
   if (!config.webScraperEndpoint || !operation) {
     return {
@@ -335,11 +442,40 @@ async function attemptStructuredScraper(
       input: [operation.input],
       limit: config.maxResults
     };
+    amiDiagLog("brightdata_source_attempt_started", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: "started",
+      inputKeyword: context.productName,
+      normalizedKeyword: classifyBrightDataInput(context).inputValue,
+      category: context.category,
+      targetMarketplace: operation.marketplace,
+      startedAt: new Date().toISOString()
+    });
+    amiDiagLog("source_collection_started", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: "started",
+      inputKeyword: context.productName,
+      normalizedKeyword: classifyBrightDataInput(context).inputValue,
+      category: context.category,
+      targetMarketplace: operation.marketplace,
+      startedAt: new Date().toISOString()
+    });
     const payload = await requestJson(
       scraperRequestEndpoint(config.webScraperEndpoint, operation),
       config.apiKey ?? "",
       requestBody,
-      config.timeoutMs
+      config.timeoutMs,
+      "POST",
+      {
+        ...diag,
+        sourceName: operation.sourceName,
+        inputKeyword: context.productName,
+        normalizedKeyword: classifyBrightDataInput(context).inputValue,
+        category: context.category,
+        targetMarketplace: operation.marketplace
+      }
     );
     const snapshotId = findSnapshotId(payload);
     let normalized = normalizeBrightDataPayload(payload, {
@@ -350,7 +486,14 @@ async function attemptStructuredScraper(
     });
 
     if (!normalized.products.length) {
-      const snapshotPayload = snapshotId ? await pollSnapshotPayload(snapshotId, config) : null;
+      const snapshotPayload = snapshotId ? await pollSnapshotPayload(snapshotId, config, {
+        ...diag,
+        sourceName: operation.sourceName,
+        inputKeyword: context.productName,
+        normalizedKeyword: classifyBrightDataInput(context).inputValue,
+        category: context.category,
+        targetMarketplace: operation.marketplace
+      }) : null;
 
       if (snapshotPayload) {
         normalized = normalizeBrightDataPayload(snapshotPayload, {
@@ -363,6 +506,20 @@ async function attemptStructuredScraper(
     }
 
     if (!normalized.products.length) {
+      amiDiagLog("brightdata_source_attempt_empty", {
+        ...diag,
+        sourceName: operation.sourceName,
+        sourceStatus: "empty",
+        recordCount: 0,
+        rawSourceSnapshotId: snapshotId
+      });
+      amiDiagLog("source_collection_empty", {
+        ...diag,
+        sourceName: operation.sourceName,
+        sourceStatus: "empty",
+        recordCount: 0,
+        rawSourceSnapshotId: snapshotId
+      });
       return {
         attempt: {
           product: "Web Scraper API",
@@ -374,16 +531,34 @@ async function attemptStructuredScraper(
           sourceName: operation.sourceName,
           marketplace: operation.marketplace,
           inputType: operation.inputType,
-          operation: operation.operation,
-          datasetId: operation.datasetId,
-          scraperName: operation.scraperName,
-          snapshotId,
-          recordCount: 0
-        } satisfies BrightDataAttempt
+        operation: operation.operation,
+        datasetId: operation.datasetId,
+        scraperName: operation.scraperName,
+        snapshotId,
+        sourceUrl: classifyBrightDataInput(context).url,
+        recordCount: 0
+      } satisfies BrightDataAttempt
       };
     }
 
     const status = normalizedStatus(normalized.products);
+    amiDiagLog("brightdata_source_attempt_completed", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: status,
+      recordCount: normalized.products.length,
+      rawSourceSnapshotId: snapshotId,
+      missingCriticalFields: normalized.products.flatMap((product) => product.dataQuality?.missingFields ?? []).slice(0, 8)
+    });
+    amiDiagLog(status === "partial" ? "source_collection_partial" : "source_collection_completed", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: status,
+      recordCount: normalized.products.length,
+      rawSourceSnapshotId: snapshotId,
+      completedAt: new Date().toISOString(),
+      missingCriticalFields: normalized.products.flatMap((product) => product.dataQuality?.missingFields ?? []).slice(0, 8)
+    });
 
     return {
       attempt: {
@@ -401,11 +576,27 @@ async function attemptStructuredScraper(
         datasetId: operation.datasetId,
         scraperName: operation.scraperName,
         snapshotId,
+        sourceUrl: classifyBrightDataInput(context).url,
         recordCount: normalized.products.length
       } satisfies BrightDataAttempt,
       ...normalized
     };
   } catch (error) {
+    amiDiagLog("brightdata_source_attempt_failed", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: "failed",
+      errorMessage: safeError(error),
+      recordCount: 0
+    });
+    amiDiagLog("source_collection_failed", {
+      ...diag,
+      sourceName: operation.sourceName,
+      sourceStatus: "failed",
+      errorMessage: safeError(error),
+      recordCount: 0,
+      completedAt: new Date().toISOString()
+    });
     return {
       attempt: {
         product: "Web Scraper API",
@@ -419,6 +610,7 @@ async function attemptStructuredScraper(
         operation: operation.operation,
         datasetId: operation.datasetId,
         scraperName: operation.scraperName,
+        sourceUrl: classifyBrightDataInput(context).url,
         recordCount: 0
       } satisfies BrightDataAttempt
     };
@@ -428,8 +620,11 @@ async function attemptStructuredScraper(
 async function attemptWebUnlocker(
   context: MarketContextPayload,
   config: BrightDataConfig,
-  collectedAt: string
+  collectedAt: string,
+  diagnostics: BrightDataDiagnostics = {}
 ): Promise<BrightDataAttemptResult> {
+  const diag = brightDataDiagFields(context, diagnostics);
+
   if (!config.webUnlockerEndpoint || !config.webUnlockerZone) {
     return {
       attempt: {
@@ -441,6 +636,27 @@ async function attemptWebUnlocker(
   }
 
   const url = buildMarketplaceSearchUrl(context);
+  const input = classifyBrightDataInput(context);
+  amiDiagLog("brightdata_source_attempt_started", {
+    ...diag,
+    sourceName: "Marketplace Search via Web Unlocker",
+    sourceStatus: "started",
+    inputKeyword: context.productName,
+    normalizedKeyword: input.inputValue,
+    category: context.category,
+    targetMarketplace: marketplaceKeyForContext(context),
+    startedAt: new Date().toISOString()
+  });
+  amiDiagLog("source_collection_started", {
+    ...diag,
+    sourceName: "Marketplace Search via Web Unlocker",
+    sourceStatus: "started",
+    inputKeyword: context.productName,
+    normalizedKeyword: input.inputValue,
+    category: context.category,
+    targetMarketplace: marketplaceKeyForContext(context),
+    startedAt: new Date().toISOString()
+  });
   const payload = await requestJson(
     config.webUnlockerEndpoint,
     config.apiKey ?? "",
@@ -450,7 +666,16 @@ async function attemptWebUnlocker(
       format: config.defaultFormat,
       country: config.defaultCountry
     },
-    config.timeoutMs
+    config.timeoutMs,
+    "POST",
+    {
+      ...diag,
+      sourceName: "Marketplace Search via Web Unlocker",
+      inputKeyword: context.productName,
+      normalizedKeyword: input.inputValue,
+      category: context.category,
+      targetMarketplace: marketplaceKeyForContext(context)
+    }
   );
   const htmlSummary =
     typeof payload === "string"
@@ -473,10 +698,38 @@ async function attemptWebUnlocker(
   });
 
   if (!normalized.products.length) {
+    amiDiagLog("brightdata_source_attempt_empty", {
+      ...diag,
+      sourceName: "Marketplace Search via Web Unlocker",
+      sourceStatus: "empty",
+      recordCount: 0
+    });
+    amiDiagLog("source_collection_empty", {
+      ...diag,
+      sourceName: "Marketplace Search via Web Unlocker",
+      sourceStatus: "empty",
+      recordCount: 0,
+      completedAt: new Date().toISOString()
+    });
     throw new Error("Web Unlocker returned no product-like records.");
   }
 
     const status = normalizedStatus(normalized.products);
+    amiDiagLog("brightdata_source_attempt_completed", {
+      ...diag,
+      sourceName: "Marketplace Search via Web Unlocker",
+      sourceStatus: status,
+      recordCount: normalized.products.length,
+      missingCriticalFields: normalized.products.flatMap((product) => product.dataQuality?.missingFields ?? []).slice(0, 8)
+    });
+    amiDiagLog(status === "partial" ? "source_collection_partial" : "source_collection_completed", {
+      ...diag,
+      sourceName: "Marketplace Search via Web Unlocker",
+      sourceStatus: status,
+      recordCount: normalized.products.length,
+      completedAt: new Date().toISOString(),
+      missingCriticalFields: normalized.products.flatMap((product) => product.dataQuality?.missingFields ?? []).slice(0, 8)
+    });
 
     return {
       attempt: {
@@ -492,6 +745,7 @@ async function attemptWebUnlocker(
       inputType: classifyBrightDataInput(context).inputType,
       operation: "web_unlocker_marketplace_search",
       scraperName: "Bright Data Web Unlocker",
+      sourceUrl: url,
       recordCount: normalized.products.length
     } satisfies BrightDataAttempt,
     ...normalized
@@ -504,12 +758,23 @@ function fallbackResult(
   collectedAt: string,
   attempts: BrightDataAttempt[],
   fallbackReason: string,
-  options: { preferSnapshot?: boolean } = {}
+  options: { preferSnapshot?: boolean; diagnostics?: BrightDataDiagnostics } = {}
 ): BrightDataCollectionResult {
   const liveAttempted = hasLiveAttempt(attempts);
-  const snapshot = options.preferSnapshot ? loadFallbackSnapshot(context, collectedAt, config.maxResults) : null;
+  const diag = brightDataDiagFields(context, options.diagnostics);
+  const snapshot = options.preferSnapshot ? loadFallbackSnapshot(context, collectedAt, config.maxResults, options.diagnostics) : null;
 
   if (snapshot) {
+    amiDiagLog("brightdata_fallback_selected", {
+      ...diag,
+      sourceName: snapshot.sourceName,
+      sourceStatus: "partial",
+      usedFallback: true,
+      fallbackReason,
+      recordCount: snapshot.products.length,
+      fallbackSources: [snapshot.ref],
+      rawSourceSnapshotId: snapshot.ref
+    });
     return {
       status: "fallback",
       brightDataProduct: snapshot.product,
@@ -539,6 +804,15 @@ function fallbackResult(
   }
 
   const fallback = createFallbackProducts(context, collectedAt, config.maxResults, fallbackReason);
+  amiDiagLog("brightdata_fallback_selected", {
+    ...diag,
+    sourceName: "Demo seed",
+    sourceStatus: "partial",
+    usedFallback: true,
+    fallbackReason,
+    recordCount: fallback.products.length,
+    fallbackSources: ["deterministic_demo_seed"]
+  });
 
   return {
     status: "fallback",
@@ -570,22 +844,35 @@ function fallbackResult(
 
 export async function collectBrightDataEvidence(
   context: MarketContextPayload,
-  overrideConfig?: Partial<BrightDataConfig>
+  overrideConfig?: Partial<BrightDataConfig>,
+  diagnostics: BrightDataDiagnostics = {}
 ): Promise<BrightDataCollectionResult> {
   const config = { ...getBrightDataConfig(), ...overrideConfig };
   const collectedAt = new Date().toISOString();
   const attempts: BrightDataAttempt[] = [];
   const env = validateBrightDataEnv(config);
+  const diag = brightDataDiagFields(context, diagnostics);
+
+  amiDiagLog("brightdata_collection_started", {
+    ...diag,
+    sourceName: marketplaceKeyForContext(context),
+    sourceStatus: "started",
+    inputKeyword: context.productName,
+    normalizedKeyword: classifyBrightDataInput(context).inputValue,
+    category: context.category,
+    targetMarketplace: marketplaceKeyForContext(context),
+    startedAt: collectedAt
+  });
 
   if (!config.useLiveWeb) {
-    return fallbackResult(context, config, collectedAt, attempts, "AMI_USE_LIVE_WEB is disabled.");
+    return fallbackResult(context, config, collectedAt, attempts, "AMI_USE_LIVE_WEB is disabled.", { diagnostics });
   }
 
   if (!env.configured) {
     const reason = `Bright Data is not fully configured: ${env.missing.join(", ")}.`;
 
     if (config.allowFallback) {
-      return fallbackResult(context, config, collectedAt, attempts, reason);
+      return fallbackResult(context, config, collectedAt, attempts, reason, { diagnostics });
     }
 
     return {
@@ -615,8 +902,8 @@ export async function collectBrightDataEvidence(
   }
 
   const runners: Array<{ product: BrightDataProduct; run: () => Promise<BrightDataAttemptResult> }> = [
-    { product: "Web Scraper API", run: () => attemptStructuredScraper(context, config, collectedAt) },
-    { product: "Web Unlocker", run: () => attemptWebUnlocker(context, config, collectedAt) }
+    { product: "Web Scraper API", run: () => attemptStructuredScraper(context, config, collectedAt, diagnostics) },
+    { product: "Web Unlocker", run: () => attemptWebUnlocker(context, config, collectedAt, diagnostics) }
   ];
 
   for (const runner of runners) {
@@ -642,6 +929,14 @@ export async function collectBrightDataEvidence(
         const products = result.products.slice(0, config.maxResults);
         const evidenceRefs = result.evidenceRefs.slice(0, config.maxResults * 3);
 
+        amiDiagLog("brightdata_collection_completed", {
+          ...diag,
+          sourceName: attempt.sourceName,
+          sourceStatus: attempt.status,
+          usedFallback: false,
+          recordCount: products.length,
+          completedAt: new Date().toISOString()
+        });
         return {
           status: "live",
           brightDataProduct: attempt.product as BrightDataProduct,
@@ -671,6 +966,21 @@ export async function collectBrightDataEvidence(
         };
       }
     } catch (error) {
+      amiDiagLog("brightdata_source_attempt_failed", {
+        ...diag,
+        sourceName: sourceNameForProduct(runner.product, context),
+        sourceStatus: "failed",
+        errorMessage: safeError(error),
+        recordCount: 0
+      });
+      amiDiagLog("source_collection_failed", {
+        ...diag,
+        sourceName: sourceNameForProduct(runner.product, context),
+        sourceStatus: "failed",
+        errorMessage: safeError(error),
+        recordCount: 0,
+        completedAt: new Date().toISOString()
+      });
       attempts.push({
         product: runner.product,
         status: "failed",
@@ -689,7 +999,7 @@ export async function collectBrightDataEvidence(
   const reason = attempts.find((attempt) => attempt.safeError)?.safeError ?? "Bright Data returned no usable normalized product data.";
 
   if (config.allowFallback) {
-    return fallbackResult(context, config, collectedAt, attempts, reason, { preferSnapshot: hasLiveAttempt(attempts) });
+    return fallbackResult(context, config, collectedAt, attempts, reason, { preferSnapshot: hasLiveAttempt(attempts), diagnostics });
   }
 
   return {
