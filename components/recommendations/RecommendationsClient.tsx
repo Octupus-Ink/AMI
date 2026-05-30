@@ -529,25 +529,62 @@ function buildPrintableReportHtml(args: {
   );
 
   if (selectedProductOpportunities.length > 0) {
+    // Determine if any of the selected product opportunities have commercial data
+    const anyCommercialPrinted = selectedProductOpportunities.some((opportunity) => {
+      const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, analysis.supplierOptions);
+      return snapshot.hasAnyCommercialData;
+    });
+
     addSection(
       "4. Selected Product Opportunities",
       `
         ${selectedProductOpportunities
           .map((opportunity) => {
             const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId);
-            const estimatedPrice = formatCurrency(evidence?.price ?? evidence?.currentPrice, evidence?.currency ?? analysis.marketContext.currency);
             const demandSignal = opportunity.demandSignal ? opportunity.demandSignal.charAt(0).toUpperCase() + opportunity.demandSignal.slice(1) : undefined;
             const confidence = formatConfidence(opportunity.confidence ?? opportunity.confidenceLevel);
             const risk = formatRisk(opportunity.risk ?? opportunity.riskLevel);
-            const margin = opportunity.estimatedMargin !== undefined ? `${opportunity.estimatedMargin.toFixed(1)}%` : undefined;
+
+            const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, analysis.supplierOptions);
+            const currency = analysis.marketContext.currency ?? "USD";
+
+            let commercialHtml = "";
+
+            if (!snapshot.hasAnyCommercialData) {
+              commercialHtml = `<div class="report-field"><strong>Pricing data was not available from the current source records.</strong></div>`;
+            } else {
+              const marketPrice = snapshot.hasMarketPrice ? escapeHtml(snapshot.marketPrice ?? "Not available") : "Not available";
+
+              let supplierCostText: string | undefined;
+              if (snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined) {
+                if (snapshot.supplierCostMin === snapshot.supplierCostMax) {
+                  supplierCostText = formatMoneyLike(snapshot.supplierCostMin, currency) ?? "Not available";
+                } else {
+                  supplierCostText = `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(snapshot.supplierCostMax, currency)}`;
+                }
+              } else if (snapshot.supplierCostMin !== undefined) {
+                supplierCostText = formatMoneyLike(snapshot.supplierCostMin, currency) ?? "Not available";
+              } else if (snapshot.supplierCostMax !== undefined) {
+                supplierCostText = formatMoneyLike(snapshot.supplierCostMax, currency) ?? "Not available";
+              }
+
+              const supplierOffers = snapshot.supplierOfferCount > 0 ? `${snapshot.supplierOfferCount} available` : undefined;
+              const delivery = snapshot.deliveryEstimate ? escapeHtml(snapshot.deliveryEstimate) : undefined;
+
+              commercialHtml = `
+                <div class="report-field"><strong>Market price:</strong> ${escapeHtml(marketPrice ?? "Not available")}</div>
+                <div class="report-field"><strong>Supplier cost:</strong> ${escapeHtml(supplierCostText ?? "Not available")}</div>
+                ${supplierOffers ? `<div class="report-field"><strong>Supplier offers:</strong> ${escapeHtml(supplierOffers)}</div>` : ""}
+                ${delivery ? `<div class="report-field"><strong>Delivery estimate:</strong> ${escapeHtml(delivery)}</div>` : ""}
+              `;
+            }
 
             return `
               <div class="report-card">
                 <h3>${escapeHtml(analysis.marketContext.productName ?? opportunity.recommendedAction ?? "Product opportunity")}</h3>
                 <div class="report-field"><strong>Category:</strong> ${escapeHtml(analysis.marketContext.category)}</div>
                 <div class="report-field"><strong>Marketplace:</strong> ${escapeHtml(analysis.marketContext.targetMarketplace)}</div>
-                ${estimatedPrice ? `<div class="report-field"><strong>Estimated price:</strong> ${escapeHtml(estimatedPrice)}</div>` : ""}
-                ${margin ? `<div class="report-field"><strong>Margin outlook:</strong> ${escapeHtml(margin)}</div>` : ""}
+                ${commercialHtml}
                 <div class="report-field"><strong>Demand signal:</strong> ${escapeHtml(demandSignal ?? "Not available")}</div>
                 <div class="report-field"><strong>Risk:</strong> ${escapeHtml(risk)}</div>
                 <div class="report-field"><strong>Confidence:</strong> ${escapeHtml(confidence)}</div>
@@ -557,6 +594,7 @@ function buildPrintableReportHtml(args: {
             `;
           })
           .join("")}
+        ${anyCommercialPrinted ? `<div class="report-field"><em>Supplier cost does not include freight, import fees, taxes, or marketplace fees.</em></div>` : ""}
       `
     );
   }
