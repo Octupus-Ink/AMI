@@ -1209,13 +1209,13 @@ export function RecommendationsClient() {
         </section>
       )}
 
-      <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+      {/* <section className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
         <EvidenceLinksPanel
           links={selectedEvidenceLinks}
           unavailableReason={selectedSourceUnavailableReason}
           rawRef={evidence?.rawRef}
         />
-      </section>
+      </section> */}
   
       <Section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1573,13 +1573,13 @@ function ActiveTabContent({
         </summary>
         {evidence ? (
           <>
-            {/* <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
               <EvidenceLinksPanel
                 links={collectEvidenceLinks(selected, evidence, analysis)}
                 unavailableReason={sourceUrlUnavailableReason(analysis, evidence, selected)}
                 rawRef={evidence.rawRef}
               />
-            </div> */}
+            </div>
             <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-700">
               <Comparison label="Product identity" value={evidence.productIdentity} />
               <Comparison label="Source marketplace" value={evidence.sourceMarketplace} />
