@@ -201,6 +201,639 @@ function formatNullableMoney(value: number | null | undefined) {
   return value === null || value === undefined ? "Unknown" : `$${value.toFixed(2)}`;
 }
 
+function escapeHtml(value: string | undefined) {
+  const text = value ?? "";
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatString(value: unknown, fallback = "Not available") {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  return String(value);
+}
+
+// Return the first non-empty/meaningful value from a list of candidates.
+function getFirstPresentValue(...values: unknown[]) {
+  return values.find((value) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "string") return value.trim().length > 0;
+    return true;
+  });
+}
+
+function formatMoneyLike(value: unknown, currency?: string | undefined) {
+  if (value === null || value === undefined) return undefined;
+
+  // Accept numeric strings too
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+    if (!Number.isFinite(parsed)) return undefined;
+    return `${currency ?? "USD"} ${parsed.toFixed(2)}`;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return undefined;
+    return `${currency ?? "USD"} ${value.toFixed(2)}`;
+  }
+
+  return undefined;
+}
+
+function buildSupplierRangeFromValues(values: (number | undefined | null)[]) {
+  const nums = values.filter((v): v is number => v !== undefined && v !== null && Number.isFinite(v));
+
+  if (nums.length === 0) return { min: undefined as number | undefined, max: undefined as number | undefined };
+
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  return { min, max };
+}
+
+function getProductCandidateCommercialSnapshot(
+  opportunity: AnalysisResult["opportunities"][number] | undefined,
+  analysis: AnalysisResult,
+  suppliers: SupplierOption[] | undefined
+) {
+  const evidence = opportunity
+    ? analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId)
+    : analysis.evidencePackages[0];
+
+  const currency = analysis.marketContext.currency ?? "USD";
+
+  // Market price: check a variety of likely fields on opportunity then evidence
+  const marketPriceRaw = getFirstPresentValue(
+    opportunity && (opportunity as any).price,
+    opportunity && (opportunity as any).priceUsd,
+    opportunity && (opportunity as any).currentPrice,
+    opportunity && (opportunity as any).currentPriceUsd,
+    opportunity && (opportunity as any).marketPrice,
+    opportunity && (opportunity as any).marketPriceUsd,
+    opportunity && (opportunity as any).estimatedPrice,
+    opportunity && (opportunity as any).estimatedPriceUsd,
+    evidence && (evidence as EvidencePackage).price,
+    evidence && (evidence as EvidencePackage).currentPrice,
+    evidence && ((evidence as EvidencePackage).price ?? (evidence as EvidencePackage).currentPrice)
+  );
+
+  const marketPrice = formatMoneyLike(marketPriceRaw, currency);
+
+  // Supplier costs: try evidence.supplierPrice, then match suppliers by rawSourceSnapshotId to gather unit costs
+  const supplierPricesFromEvidence = [] as (number | undefined)[];
+
+  if (evidence && (evidence as EvidencePackage).supplierPrice !== undefined) {
+    supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
+  }
+
+  let supplierOfferCount = 0;
+  const supplierCandidates: number[] = [];
+
+  if (suppliers && evidence) {
+    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && evidence.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+
+    if (matches.length > 0) {
+      supplierOfferCount = matches.length;
+      for (const s of matches) {
+        if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
+          supplierCandidates.push((s as any).estimatedUnitCost);
+        }
+      }
+    }
+  }
+
+  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
+
+  // Delivery estimate: prefer evidence->delivery note, otherwise supplier estimatedDeliveryTime if uniquely matched
+  const deliveryEstimate = getFirstPresentValue(
+    evidence && (evidence as any).estimatedDeliveryTime,
+    suppliers && suppliers.length === 1 && (suppliers[0].estimatedDeliveryTime as any)
+  );
+
+  const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
+  const hasSupplierCost = Boolean(supplierCostMin !== undefined || supplierCostMax !== undefined);
+  const hasAnyCommercialData = hasMarketPrice || hasSupplierCost || supplierOfferCount > 0 || Boolean(deliveryEstimate);
+
+  return {
+    marketPriceRaw,
+    marketPrice,
+    supplierCostMin,
+    supplierCostMax,
+    supplierOfferCount,
+    deliveryEstimate: typeof deliveryEstimate === "string" ? deliveryEstimate : deliveryEstimate ? String(deliveryEstimate) : undefined,
+    hasMarketPrice,
+    hasSupplierCost,
+    hasAnyCommercialData
+  };
+}
+
+function getCommercialSnapshotFromEvidence(evidence: EvidencePackage | undefined, suppliers: SupplierOption[] | undefined, currency?: string) {
+  const currencyUsed = currency ?? "USD";
+
+  if (!evidence) {
+    return {
+      marketPriceRaw: undefined,
+      marketPrice: undefined,
+      supplierCostMin: undefined,
+      supplierCostMax: undefined,
+      supplierOfferCount: 0,
+      deliveryEstimate: undefined,
+      hasMarketPrice: false,
+      hasSupplierCost: false,
+      hasAnyCommercialData: false
+    };
+  }
+
+  const marketPriceRaw = getFirstPresentValue((evidence as EvidencePackage).price, (evidence as EvidencePackage).currentPrice);
+  const marketPrice = formatMoneyLike(marketPriceRaw, currencyUsed);
+
+  const supplierPricesFromEvidence = [] as (number | undefined)[];
+  if ((evidence as EvidencePackage).supplierPrice !== undefined) {
+    supplierPricesFromEvidence.push((evidence as EvidencePackage).supplierPrice as number | undefined);
+  }
+
+  let supplierOfferCount = 0;
+  const supplierCandidates: number[] = [];
+
+  if (suppliers && evidence && evidence.rawSourceSnapshotId) {
+    const matches = suppliers.filter((s) => s.rawSourceSnapshotId && s.rawSourceSnapshotId === evidence.rawSourceSnapshotId);
+    supplierOfferCount = matches.length;
+    for (const s of matches) {
+      if (typeof (s as any).estimatedUnitCost === "number" && Number.isFinite((s as any).estimatedUnitCost)) {
+        supplierCandidates.push((s as any).estimatedUnitCost);
+      }
+    }
+  }
+
+  const allSupplierNums = [...supplierPricesFromEvidence.filter(Boolean) as number[], ...supplierCandidates];
+  const { min: supplierCostMin, max: supplierCostMax } = buildSupplierRangeFromValues(allSupplierNums);
+
+  const deliveryEstimate = getFirstPresentValue((evidence as any).estimatedDeliveryTime);
+
+  const hasMarketPrice = Boolean(marketPriceRaw !== undefined && marketPriceRaw !== null && marketPrice !== undefined);
+  const hasSupplierCost = Boolean(supplierCostMin !== undefined || supplierCostMax !== undefined);
+  const hasAnyCommercialData = hasMarketPrice || hasSupplierCost || supplierOfferCount > 0 || Boolean(deliveryEstimate);
+
+  return {
+    marketPriceRaw,
+    marketPrice,
+    supplierCostMin,
+    supplierCostMax,
+    supplierOfferCount,
+    deliveryEstimate: typeof deliveryEstimate === "string" ? deliveryEstimate : deliveryEstimate ? String(deliveryEstimate) : undefined,
+    hasMarketPrice,
+    hasSupplierCost,
+    hasAnyCommercialData
+  };
+}
+
+function formatCurrency(value: unknown, currency?: string | undefined) {
+  if (typeof value === "number") {
+    return `${currency ?? "USD"} ${value.toFixed(2)}`;
+  }
+
+  return undefined;
+}
+
+function formatConfidence(value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return "Not available";
+  }
+
+  if (typeof value === "number") {
+    return `${Math.round(value * 100)}%`;
+  }
+
+  const text = String(value);
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+function formatRisk(value: string | undefined) {
+  if (!value) {
+    return "Not available";
+  }
+
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function buildCountLabel(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function buildPrintableReportHtml(args: {
+  analysis: AnalysisResult;
+  selectedProductOpportunities: AnalysisResult["opportunities"];
+  selectedPromoItems: Array<{
+    label: string;
+    recommendedAction?: string;
+    expectedImpact?: string;
+    risk?: string;
+    confidence?: string;
+    reason?: string;
+  }>;
+  selectedInventoryItems: Array<{
+    label: string;
+    currentInventorySignal?: string;
+    recommendedAction?: string;
+    businessReason?: string;
+    risk?: string;
+    confidence?: string;
+  }>;
+  selectedSupplierOptions: SupplierOption[];
+  qualityNotice: { title: string; body: string } | null;
+  evidenceLinks: EvidenceLink[];
+}) {
+  const {
+    analysis,
+    selectedProductOpportunities,
+    selectedPromoItems,
+    selectedInventoryItems,
+    selectedSupplierOptions,
+    qualityNotice,
+    evidenceLinks
+  } = args;
+
+  const businessGoal = goalLabel(analysis.marketContext.businessGoal);
+  const marketplace = formatString(analysis.marketContext.targetMarketplace, "Unknown");
+  const region = formatString(analysis.marketContext.region, "Unknown");
+  const currency = formatString(analysis.marketContext.currency, "Unknown");
+  const selectedRecommendationCount =
+    selectedProductOpportunities.length + selectedPromoItems.length + selectedInventoryItems.length + selectedSupplierOptions.length;
+  const generatedDate = new Date().toLocaleString();
+  const inventoryContext = analysis.marketContext.useInventoryContext ? "Included" : "Not connected for this analysis";
+  const partnerChoiceSummary = [
+    buildCountLabel(selectedProductOpportunities.length, "product opportunity", "product opportunities"),
+    buildCountLabel(selectedPromoItems.length, "promo opportunity", "promo opportunities"),
+    buildCountLabel(selectedInventoryItems.length, "inventory action", "inventory actions"),
+    buildCountLabel(selectedSupplierOptions.length, "supplier note", "supplier notes")
+  ];
+
+  const reportSections: string[] = [];
+
+  const addSection = (title: string, content: string) => {
+    reportSections.push(`
+      <section class="report-section">
+        <h2>${escapeHtml(title)}</h2>
+        ${content}
+      </section>
+    `);
+  };
+
+  addSection(
+    "1. Executive Summary",
+    `
+      <div class="summary-grid">
+        <div><strong>Business goal:</strong> ${escapeHtml(businessGoal)}</div>
+        <div><strong>Marketplace:</strong> ${escapeHtml(marketplace)}</div>
+        <div><strong>Region:</strong> ${escapeHtml(region)}</div>
+        <div><strong>Currency:</strong> ${escapeHtml(currency)}</div>
+        <div><strong>Selected recommendations:</strong> ${selectedRecommendationCount}</div>
+        <div><strong>Generated:</strong> ${escapeHtml(generatedDate)}</div>
+      </div>
+    `
+  );
+
+  const contextRows = [
+    `<div><strong>Business goal:</strong> ${escapeHtml(businessGoal)}</div>`,
+    `<div><strong>Marketplace:</strong> ${escapeHtml(marketplace)}</div>`,
+    `<div><strong>Region:</strong> ${escapeHtml(region)}</div>`,
+    `<div><strong>Currency:</strong> ${escapeHtml(currency)}</div>`,
+    `<div><strong>Category:</strong> ${escapeHtml(analysis.marketContext.category)}</div>`,
+    `<div><strong>Target product:</strong> ${escapeHtml(analysis.marketContext.productName)}</div>`,
+    `<div><strong>Supplier source:</strong> ${escapeHtml(analysis.marketContext.supplierSource)}</div>`,
+    `<div><strong>Inventory context:</strong> ${escapeHtml(inventoryContext)}</div>`
+  ];
+
+  addSection("2. Analysis Context", `
+      <div class="report-list">
+        ${contextRows.join("")}
+      </div>
+    `
+  );
+
+  addSection(
+    "3. Partner’s Choice",
+    `
+      <p>Partner’s Choice includes:</p>
+      <ul class="report-list">
+        ${partnerChoiceSummary.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    `
+  );
+
+  if (selectedProductOpportunities.length > 0) {
+    // Determine if any of the selected product opportunities have commercial data
+    const anyCommercialPrinted = selectedProductOpportunities.some((opportunity) => {
+      const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, analysis.supplierOptions);
+      return snapshot.hasAnyCommercialData;
+    });
+
+    addSection(
+      "4. Selected Product Opportunities",
+      `
+        ${selectedProductOpportunities
+          .map((opportunity) => {
+            const evidence = analysis.evidencePackages.find((item) => item.evidencePackageId === opportunity.evidencePackageId);
+            const demandSignal = opportunity.demandSignal ? opportunity.demandSignal.charAt(0).toUpperCase() + opportunity.demandSignal.slice(1) : undefined;
+            const confidence = formatConfidence(opportunity.confidence ?? opportunity.confidenceLevel);
+            const risk = formatRisk(opportunity.risk ?? opportunity.riskLevel);
+
+            const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, analysis.supplierOptions);
+            const currency = analysis.marketContext.currency ?? "USD";
+
+            let commercialHtml = "";
+
+            if (!snapshot.hasAnyCommercialData) {
+              commercialHtml = `<div class="report-field"><strong>Pricing data was not available from the current source records.</strong></div>`;
+            } else {
+              const marketPrice = snapshot.hasMarketPrice ? escapeHtml(snapshot.marketPrice ?? "Not available") : "Not available";
+
+              let supplierCostText: string | undefined;
+              if (snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined) {
+                if (snapshot.supplierCostMin === snapshot.supplierCostMax) {
+                  supplierCostText = formatMoneyLike(snapshot.supplierCostMin, currency) ?? "Not available";
+                } else {
+                  supplierCostText = `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(snapshot.supplierCostMax, currency)}`;
+                }
+              } else if (snapshot.supplierCostMin !== undefined) {
+                supplierCostText = formatMoneyLike(snapshot.supplierCostMin, currency) ?? "Not available";
+              } else if (snapshot.supplierCostMax !== undefined) {
+                supplierCostText = formatMoneyLike(snapshot.supplierCostMax, currency) ?? "Not available";
+              }
+
+              const supplierOffers = snapshot.supplierOfferCount > 0 ? `${snapshot.supplierOfferCount} available` : undefined;
+              const delivery = snapshot.deliveryEstimate ? escapeHtml(snapshot.deliveryEstimate) : undefined;
+
+              commercialHtml = `
+                <div class="report-field"><strong>Market price:</strong> ${escapeHtml(marketPrice ?? "Not available")}</div>
+                <div class="report-field"><strong>Supplier cost:</strong> ${escapeHtml(supplierCostText ?? "Not available")}</div>
+                ${supplierOffers ? `<div class="report-field"><strong>Supplier offers:</strong> ${escapeHtml(supplierOffers)}</div>` : ""}
+                ${delivery ? `<div class="report-field"><strong>Delivery estimate:</strong> ${escapeHtml(delivery)}</div>` : ""}
+              `;
+            }
+
+            return `
+              <div class="report-card">
+                <h3>${escapeHtml(analysis.marketContext.productName ?? opportunity.recommendedAction ?? "Product opportunity")}</h3>
+                <div class="report-field"><strong>Category:</strong> ${escapeHtml(analysis.marketContext.category)}</div>
+                <div class="report-field"><strong>Marketplace:</strong> ${escapeHtml(analysis.marketContext.targetMarketplace)}</div>
+                ${commercialHtml}
+                <div class="report-field"><strong>Demand signal:</strong> ${escapeHtml(demandSignal ?? "Not available")}</div>
+                <div class="report-field"><strong>Risk:</strong> ${escapeHtml(risk)}</div>
+                <div class="report-field"><strong>Confidence:</strong> ${escapeHtml(confidence)}</div>
+                <div class="report-field"><strong>Recommended action:</strong> ${escapeHtml(opportunity.recommendedAction)}</div>
+                <div class="report-field"><strong>Why this matters:</strong> ${escapeHtml(opportunity.primaryReason)}</div>
+              </div>
+            `;
+          })
+          .join("")}
+        ${anyCommercialPrinted ? `<div class="report-field"><em>Supplier cost does not include freight, import fees, taxes, or marketplace fees.</em></div>` : ""}
+      `
+    );
+  }
+
+  if (selectedPromoItems.length > 0) {
+    addSection(
+      "5. Selected Promo Opportunities",
+      `
+        ${selectedPromoItems
+          .map((item) => `
+            <div class="report-card">
+              <h3>${escapeHtml(item.label)}</h3>
+              ${item.recommendedAction ? `<div class="report-field"><strong>Recommended promo action:</strong> ${escapeHtml(item.recommendedAction)}</div>` : ""}
+              ${item.expectedImpact ? `<div class="report-field"><strong>Expected impact:</strong> ${escapeHtml(item.expectedImpact)}</div>` : ""}
+              <div class="report-field"><strong>Risk:</strong> ${escapeHtml(formatRisk(item.risk))}</div>
+              <div class="report-field"><strong>Confidence:</strong> ${escapeHtml(formatConfidence(item.confidence))}</div>
+              ${item.reason ? `<div class="report-field"><strong>Reason:</strong> ${escapeHtml(item.reason)}</div>` : ""}
+            </div>
+          `)
+          .join("")}
+      `
+    );
+  }
+
+  if (selectedInventoryItems.length > 0) {
+    addSection(
+      "6. Selected Inventory Actions",
+      `
+        ${selectedInventoryItems
+          .map((item) => `
+            <div class="report-card">
+              <h3>${escapeHtml(item.label)}</h3>
+              ${item.currentInventorySignal ? `<div class="report-field"><strong>Current inventory signal:</strong> ${escapeHtml(item.currentInventorySignal)}</div>` : ""}
+              ${item.recommendedAction ? `<div class="report-field"><strong>Recommended action:</strong> ${escapeHtml(item.recommendedAction)}</div>` : ""}
+              ${item.businessReason ? `<div class="report-field"><strong>Business reason:</strong> ${escapeHtml(item.businessReason)}</div>` : ""}
+              <div class="report-field"><strong>Risk:</strong> ${escapeHtml(formatRisk(item.risk))}</div>
+              <div class="report-field"><strong>Confidence:</strong> ${escapeHtml(formatConfidence(item.confidence))}</div>
+            </div>
+          `)
+          .join("")}
+      `
+    );
+  }
+
+  if (selectedSupplierOptions.length > 0) {
+    addSection(
+      "7. Selected Supplier Notes",
+      `
+        ${selectedSupplierOptions
+          .map((supplier) => `
+            <div class="report-card">
+              <h3>${escapeHtml(supplier.supplierName)}</h3>
+              <div class="report-field"><strong>Source market:</strong> ${escapeHtml(supplier.source)}</div>
+              <div class="report-field"><strong>Estimated cost:</strong> ${escapeHtml(formatCurrency(supplier.estimatedUnitCost, analysis.marketContext.currency))}</div>
+              <div class="report-field"><strong>Estimated delivery time:</strong> ${escapeHtml(supplier.estimatedDeliveryTime)}</div>
+              <div class="report-field"><strong>Supplier risk:</strong> ${escapeHtml(formatRisk(supplier.risk))}</div>
+              <div class="report-field"><strong>Availability signal:</strong> ${escapeHtml(supplier.availability)}</div>
+              <div class="report-field"><strong>Notes:</strong> ${escapeHtml(supplier.ratingQualityProxy)}</div>
+            </div>
+          `)
+          .join("")}
+      `
+    );
+  }
+
+  if (qualityNotice) {
+    addSection(
+      "8. Data Quality Notice",
+      `<p>${escapeHtml(qualityNotice.body)}</p>`
+    );
+  }
+
+  const evidenceItemsSection = evidenceLinks.length
+    ? `<ul class="report-list">
+        ${evidenceLinks
+          .map((link) => `<li><a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(link.label)}</a></li>`)
+          .join("")}
+      </ul>`
+    : `<p>Evidence is based on marketplace, trend, supplier, and inventory signals captured during this analysis.</p>`;
+
+  addSection("9. Evidence Summary", `
+      <p>AMI analyses the following evidence to support these recommendations:</p>
+      <ul class="report-list">
+        <li>Marketplace price and competitor signals.</li>
+        <li>Demand and trend indicators for the target product or category.</li>
+        <li>Supplier availability and cost signals.</li>
+        <li>Inventory context signals when available.</li>
+      </ul>
+      ${evidenceItemsSection}
+    `
+  );
+
+  const nextSteps: string[] = [
+    "Review live marketplace prices before purchase.",
+    "Compare supplier delivery times before committing.",
+    "Prioritize products with stronger demand signals and acceptable risk.",
+    "Re-check items with degraded data quality before acting."
+  ];
+
+  addSection(
+    "10. Recommended Next Steps",
+    `
+      <ul class="report-list">
+        ${nextSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+      </ul>
+    `
+  );
+
+  addSection(
+    "11. Disclaimer",
+    `<p>AMI recommendations are decision-support outputs. Review live marketplace, inventory, supplier, and pricing data before making purchase, restock, pricing, or supplier decisions.</p>`
+  );
+
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title>AMI Marketplace Report</title>
+        <style>
+          body { margin: 0; padding: 24px; font-family: Inter, Arial, sans-serif; color: #111827; background: #ffffff; }
+          h1, h2, h3 { margin: 0; }
+          h1 { font-size: 32px; margin-bottom: 16px; }
+          h2 { font-size: 20px; margin-top: 32px; margin-bottom: 12px; }
+          h3 { font-size: 16px; margin-top: 20px; margin-bottom: 8px; }
+          p { margin: 0 0 12px; line-height: 1.6; }
+          .summary-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+          .report-list { margin: 0; padding-left: 18px; }
+          .report-list li { margin-bottom: 6px; }
+          .report-field { margin-bottom: 8px; }
+          .report-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; background: #f8fafc; margin-bottom: 16px; }
+          .report-section { page-break-inside: avoid; }
+          a { color: #0f766e; text-decoration: none; }
+          a:hover { text-decoration: underline; }
+          @media print {
+            body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .no-print { display: none; }
+            a::after { content: " (" attr(href) ")"; font-size: 12px; }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>AMI Marketplace Report</h1>
+        ${reportSections.join("")}
+      </body>
+    </html>
+  `;
+}
+
+function getSelectedProductOpportunities(analysis: AnalysisResult, selectedProductIds: Set<string>) {
+  const selectedIds = new Set(Array.from(selectedProductIds).map((id) => id.replace(/^product-/, "")));
+  return analysis.opportunities.filter((opportunity) => selectedIds.has(opportunity.recommendationId));
+}
+
+function getSelectedPromoItems(analysis: AnalysisResult, selectedPromoIds: Set<string>) {
+  return Array.from(selectedPromoIds)
+    .map((rowId) => {
+      const rawId = rowId.replace(/^promo-/, "");
+      const opportunity = analysis.opportunities.find((item) => item.recommendationId === rawId);
+      if (opportunity) {
+        return {
+          label: opportunity.recommendedAction ?? "Promo opportunity",
+          recommendedAction: opportunity.recommendedAction,
+          expectedImpact: `${opportunity.matchQuality} match · ${opportunity.signalStrength} signal`,
+          risk: formatRisk(opportunity.risk ?? opportunity.riskLevel),
+          confidence: formatConfidence(opportunity.confidence ?? opportunity.confidenceLevel),
+          reason: opportunity.primaryReason
+        };
+      }
+
+      const finding = analysis.assistantFindings.find((item) => `${item.assistantId}-${item.finding}` === rawId);
+      if (finding) {
+        const productLabel = finding.assistantId === "competitor" ? "Competitor signal" : finding.assistantId === "trend" ? "Trend signal" : "Promo signal";
+        return {
+          label: productLabel,
+          recommendedAction: finding.finding,
+          expectedImpact: `${finding.signal} signal`,
+          risk: formatRisk(finding.risk),
+          confidence: formatConfidence(finding.confidence),
+          reason: finding.reason
+        };
+      }
+
+      return null;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
+function getSelectedInventoryItems(
+  analysis: AnalysisResult,
+  selectedInventoryIds: Set<string>,
+  selected: AnalysisResult["executiveRecommendation"]
+) {
+  return Array.from(selectedInventoryIds)
+    .map((rowId) => {
+      const rawId = rowId.replace(/^inventory-/, "");
+
+      if (rawId.startsWith("finding-")) {
+        const findingKey = rawId.replace(/^finding-/, "");
+        const finding = analysis.assistantFindings.find((item) => item.assistantId === "inventory" && item.finding === findingKey);
+        if (finding) {
+          return {
+            label: finding.finding,
+            currentInventorySignal: finding.signal,
+            recommendedAction: selected.assistantContributions.find((item) => item.assistantId === "inventory")?.latestContribution,
+            businessReason: finding.reason,
+            risk: formatRisk(finding.risk),
+            confidence: formatConfidence(finding.confidence)
+          };
+        }
+      }
+
+      if (rawId.startsWith("contribution-")) {
+        const contribution = selected.assistantContributions.find((item) => item.assistantId === "inventory");
+        if (contribution) {
+          return {
+            label: contribution.latestContribution,
+            currentInventorySignal: contribution.signalStrength,
+            recommendedAction: contribution.latestContribution,
+            businessReason: contribution.summary,
+            risk: formatRisk(contribution.risk),
+            confidence: formatConfidence(contribution.confidence)
+          };
+        }
+      }
+
+      return null;
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
+function getSelectedSupplierOptions(suppliers: SupplierOption[], selectedSupplierIds: Set<string>) {
+  return suppliers.filter((supplier, index) => selectedSupplierIds.has(getSupplierRowId(supplier, index)));
+}
+
+function getEvidenceLinksForReport(analysis: AnalysisResult, selected: AnalysisResult["executiveRecommendation"], evidence: EvidencePackage | undefined) {
+  return collectEvidenceLinks(selected, evidence, analysis);
+}
+
 function dataQualityCopy(analysis: AnalysisResult) {
   const quality = analysis.dataQualitySummary ?? analysis.executiveRecommendation.dataQuality;
 
@@ -550,18 +1183,58 @@ function toggleSelection(setSelectedIds: Dispatch<SetStateAction<Set<string>>>, 
   });
 }
 
-function deriveProductCandidates(analysis: AnalysisResult): PreviewRowData[] {
+function deriveProductCandidates(analysis: AnalysisResult, suppliers?: SupplierOption[]): PreviewRowData[] {
   const productName = analysis.marketContext.productName;
 
-  return analysis.opportunities.map((opportunity) => ({
-    id: `product-${opportunity.recommendationId}`,
-    title: productName,
-    summary: opportunity.primaryReason,
-    risk: opportunity.riskLevel,
-    confidence: opportunity.confidenceLevel,
-    meta: formatMargin(opportunity.estimatedMargin),
-    variant: "product"
-  }));
+  return analysis.opportunities.map((opportunity) => {
+    const snapshot = getProductCandidateCommercialSnapshot(opportunity, analysis, suppliers);
+    const currency = analysis.marketContext.currency ?? "USD";
+
+    let commercialMeta: string | undefined;
+
+    if (snapshot.hasAnyCommercialData) {
+      const market = snapshot.hasMarketPrice ? snapshot.marketPrice : undefined;
+
+      let supplierText: string | undefined;
+
+      if (snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined) {
+        if (snapshot.supplierCostMin === snapshot.supplierCostMax) {
+          supplierText = formatMoneyLike(snapshot.supplierCostMin, currency);
+        } else {
+          supplierText = `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(
+            snapshot.supplierCostMax,
+            currency
+          )}`;
+        }
+      }
+
+      if (market && supplierText) {
+        commercialMeta = `Market price: ${market} · Supplier cost: ${supplierText}`;
+      } else if (market) {
+        commercialMeta = `Market price: ${market} · Supplier cost unavailable`;
+      } else if (supplierText) {
+        commercialMeta = `Market price unavailable · Supplier cost: ${supplierText}`;
+      } else if (snapshot.supplierOfferCount > 0) {
+        commercialMeta = `Market price unavailable · ${snapshot.supplierOfferCount} supplier offers`;
+      } else if (snapshot.deliveryEstimate) {
+        commercialMeta = `Delivery: ${snapshot.deliveryEstimate}`;
+      }
+    }
+
+    if (!commercialMeta) {
+      commercialMeta = "Pricing unavailable";
+    }
+
+    return {
+      id: `product-${opportunity.recommendationId}`,
+      title: productName,
+      summary: opportunity.primaryReason,
+      risk: opportunity.riskLevel,
+      confidence: opportunity.confidenceLevel,
+      meta: commercialMeta,
+      variant: "product"
+    };
+  });
 }
 
 function isPromoLikeText(text: string) {
@@ -1064,8 +1737,55 @@ export function RecommendationsClient() {
     return analysis.opportunities.find((recommendation) => recommendation.recommendationId === selectedId) ?? analysis.executiveRecommendation;
   }, [analysis, selectedId]);
 
-  if (!analysis || !selected) {
-    return null;
+  if (!analysis) {
+    return (
+      <PageShell>
+        <Surface className="p-6">
+          <div className="flex flex-col items-start gap-4">
+            <h2 className="text-xl font-semibold text-[var(--text)]">AMI Strategy</h2>
+            <p className="text-sm text-[var(--text-secondary)]">No analysis found for this session.</p>
+            <p className="text-sm text-[var(--text-tertiary)]">
+              No recommendation data is available for this session. Return to briefing and start a new AMI analysis.
+            </p>
+            <div>
+              <button
+                type="button"
+                onClick={() => router.push("/market-context-setup")}
+                className="mt-3 inline-flex items-center rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-hover)]"
+              >
+                Return to briefing
+              </button>
+            </div>
+          </div>
+        </Surface>
+      </PageShell>
+    );
+  }
+
+  if (!selected) {
+    return (
+      <PageShell>
+        <Surface className="p-6">
+          <div className="flex flex-col items-start gap-4">
+            <h2 className="text-xl font-semibold text-[var(--text)]">AMI Strategy</h2>
+            <p className="text-sm text-[var(--text-secondary)]">No recommendation is available yet.</p>
+            <p className="text-sm text-[var(--text-tertiary)]">
+              AMI could not identify a selected recommendation from the current analysis data. Return to briefing to
+              review the market context and run a new analysis.
+            </p>
+            <div>
+              <button
+                type="button"
+                onClick={() => router.push("/market-context-setup")}
+                className="mt-3 inline-flex items-center rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-hover)]"
+              >
+                Return to briefing
+              </button>
+            </div>
+          </div>
+        </Surface>
+      </PageShell>
+    );
   }
 
   const sourceState = sourceStateForAnalysis(analysis);
@@ -1083,13 +1803,58 @@ export function RecommendationsClient() {
           risk: contribution.risk,
           confidence: contribution.confidence
         }));
+  const qualityNotice = dataQualityCopy(analysis);
+  const totalSelectedCount =
+    selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size;
+  const defaultExportMessage = totalSelectedCount > 0 ? "Ready to export selected report." : "";
+
+  const handleExportReport = () => {
+    if (totalSelectedCount === 0) {
+      setExportPlaceholderMessage("Select at least one recommendation before exporting the report.");
+      return;
+    }
+
+    setExportPlaceholderMessage("Preparing report...");
+
+    const selectedProductOpportunities = getSelectedProductOpportunities(analysis, selectedProductIds);
+    const selectedPromoItems = getSelectedPromoItems(analysis, selectedPromoIds);
+    const selectedInventoryItems = getSelectedInventoryItems(analysis, selectedInventoryIds, selected);
+    const selectedSupplierOptions = getSelectedSupplierOptions(suppliers, selectedSupplierIds);
+    const evidenceLinksForReport = getEvidenceLinksForReport(analysis, selected, evidence);
+    const reportHtml = buildPrintableReportHtml({
+      analysis,
+      selectedProductOpportunities,
+      selectedPromoItems,
+      selectedInventoryItems,
+      selectedSupplierOptions,
+      qualityNotice,
+      evidenceLinks: evidenceLinksForReport
+    });
+
+    const reportWindow = window.open("", "_blank");
+
+    if (!reportWindow) {
+      setExportPlaceholderMessage("Unable to open the report window. Please allow pop-ups and try again.");
+      return;
+    }
+
+    reportWindow.document.open();
+    reportWindow.document.write(reportHtml);
+    reportWindow.document.close();
+    reportWindow.document.title = "AMI Marketplace Report";
+    reportWindow.addEventListener("load", () => {
+      reportWindow.focus();
+      reportWindow.print();
+    });
+
+    setExportPlaceholderMessage("Report opened. Use your browser print dialog to save it as PDF.");
+  };
   const promoCandidateCount = analysis.assistantFindings.filter(
     (finding) => (finding.assistantId === "trend" || finding.assistantId === "competitor") && finding.signal !== "weak"
   ).length;
   const inventoryActionCount = analysis.assistantFindings.filter(
     (finding) => finding.assistantId === "inventory" && analysis.assistantStatus?.inventory !== "skipped"
   ).length;
-  const qualityNotice = dataQualityCopy(analysis);
 
   return (//<--- aqui abre
     <PageShell>
@@ -1234,19 +1999,13 @@ export function RecommendationsClient() {
           <div className="flex flex-col items-start gap-2 sm:items-end">
             <button
               type="button"
-              onClick={() => {
-                if (selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size > 0) {
-                  setExportPlaceholderMessage("Report export is not connected yet.");
-                }
-              }}
-              disabled={selectedProductIds.size + selectedPromoIds.size + selectedInventoryIds.size + selectedSupplierIds.size === 0}
+              onClick={handleExportReport}
+              disabled={totalSelectedCount === 0}
               className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-950 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Export AMI Report
             </button>
-            {exportPlaceholderMessage ? (
-              <p className="text-xs leading-5 text-slate-600">{exportPlaceholderMessage}</p>
-            ) : null}
+            <p className="text-xs leading-5 text-slate-600">{exportPlaceholderMessage || defaultExportMessage}</p>
           </div>
         </div>
       </Section>
@@ -1395,7 +2154,7 @@ function ActiveTabContent({
   const [promoPage, setPromoPage] = useState(0);
   const [inventoryPage, setInventoryPage] = useState(0);
 
-  const productRows = useMemo(() => deriveProductCandidates(analysis), [analysis]);
+  const productRows = useMemo(() => deriveProductCandidates(analysis, suppliers), [analysis, suppliers]);
   const promoRows = useMemo(
     () => derivePromoCandidates(analysis).map((row) => ({ ...row, id: `promo-${row.id}` })),
     [analysis]
@@ -1513,6 +2272,7 @@ function ActiveTabContent({
             />
             <p className="text-sm text-slate-600">{formatSupplierSelectedCount(selectedSupplierIds.size)}</p>
           </div>
+          <p className="mb-4 text-xs text-[var(--text-tertiary)]">{suppliers.length} suppliers found · ranked by match confidence</p>
           {selectedProductIds.size > 0 ? (
             <p className="mt-3 text-sm text-slate-600">
               Supplier coverage is currently scoped to selected product candidates.
@@ -1565,6 +2325,24 @@ function ActiveTabContent({
         />
         <BrightDataPill />
       </div>
+
+      {/* lightweight context line: evidence sources and assistant list */}
+      {(() => {
+        const sourcesCount = analysis.evidenceRefs?.length ?? analysis.evidencePackages?.length ?? 0;
+        const assistantNames = selected.assistantContributions
+          .map((c) => VisibleAssistants.find((item) => item.id === c.assistantId)?.name)
+          .filter(Boolean) as string[];
+
+        if (assistantNames.length > 0) {
+          return (
+            <p className="mb-4 text-xs text-[var(--text-tertiary)]">{sourcesCount} sources · from {assistantNames.join(", ")}</p>
+          );
+        }
+
+        return (
+          <p className="mb-4 text-xs text-[var(--text-tertiary)]">{sourcesCount} sources · from available assistant evidence</p>
+        );
+      })()}
 
       <details className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4" open>
         <summary className="flex items-center justify-between text-sm font-semibold text-slate-950">
@@ -1682,6 +2460,23 @@ function SelectablePaginatedTab({
         <TabHeader title={title} description={description} />
         <p className="text-sm text-slate-600">{selectedIds.size} selected</p>
       </div>
+
+      {/* lightweight context line for clarity (low emphasis) */}
+      {(() => {
+        if (title === "Product Candidates") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} product opportunities · ranked by confidence</p>;
+        }
+
+        if (title === "Promo Candidates") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} promo opportunities · ranked by margin potential</p>;
+        }
+
+        if (title === "Inventory Actions") {
+          return <p className="mb-4 text-xs text-[var(--text-tertiary)]">{total} inventory actions · ranked by urgency</p>;
+        }
+
+        return null;
+      })()}
 
       {total === 0 ? (
         <div className="mt-4">{emptyState}</div>
@@ -1814,7 +2609,10 @@ function ItemDetailDrawer({
   useDrawerLock(onClose);
 
   const marginLabel =
-    detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
+    // Do not display margin for product candidate drawers (MVP rule)
+    detail.variant === "product"
+      ? undefined
+      : detail.estimatedMargin !== undefined && detail.estimatedMargin > 0
       ? `Est. margin ${detail.estimatedMargin.toFixed(1)}%`
       : undefined;
 
@@ -1879,6 +2677,43 @@ function ItemDetailDrawer({
               <DrawerField label="Selected status" value={isSelected ? "Selected" : "Not selected"} />
             </dl>
           </section>
+
+          {/* Commercial snapshot inserted for product candidates */}
+          {detail.variant === "product" && (
+            <section className="mt-6 border-t border-slate-100 pt-5">
+              <h4 className="text-sm font-semibold text-slate-950">Commercial snapshot</h4>
+              <div className="mt-3">
+                {(() => {
+                  const snapshot = getCommercialSnapshotFromEvidence(detail.evidence, detail.suppliers, detail.evidence?.currency);
+                  const currency = detail.evidence?.currency ?? "USD";
+
+                  if (!snapshot.hasAnyCommercialData) {
+                    return <p className="mt-2 text-sm text-slate-600">Pricing data was not available from the current source records.</p>;
+                  }
+
+                  const supplierText = snapshot.supplierCostMin !== undefined && snapshot.supplierCostMax !== undefined
+                    ? snapshot.supplierCostMin === snapshot.supplierCostMax
+                      ? formatMoneyLike(snapshot.supplierCostMin, currency)
+                      : `${formatMoneyLike(snapshot.supplierCostMin, currency)}–${formatMoneyLike(snapshot.supplierCostMax, currency)}`
+                    : undefined;
+
+                  return (
+                    <dl className="mt-2 flex flex-col gap-2">
+                      <DrawerField label="Market price" value={snapshot.marketPrice ?? "Not available"} />
+                      <DrawerField label="Supplier cost" value={supplierText ?? (snapshot.supplierOfferCount > 0 ? "Not available" : "Not available")} />
+                      {snapshot.supplierOfferCount > 0 && (
+                        <DrawerField label="Supplier offers" value={`${snapshot.supplierOfferCount} offer${snapshot.supplierOfferCount === 1 ? "" : "s"}`} />
+                      )}
+                      {snapshot.deliveryEstimate && <DrawerField label="Delivery estimate" value={String(snapshot.deliveryEstimate)} />}
+                      {(snapshot.hasSupplierCost || snapshot.supplierOfferCount > 0) && (
+                        <p className="mt-3 text-xs text-slate-600">Supplier cost does not include freight, import fees, taxes, or marketplace fees.</p>
+                      )}
+                    </dl>
+                  );
+                })()}
+              </div>
+            </section>
+          )}
 
           <section className="mt-6 border-t border-slate-100 pt-5">
             <h4 className="text-sm font-semibold text-slate-950">Opportunity score</h4>

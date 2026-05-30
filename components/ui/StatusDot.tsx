@@ -4,10 +4,10 @@ export function StatusDot({
   tone?: "teal" | "amber" | "red" | "green" | "slate";
 }) {
   const color = {
-    teal: "bg-teal-500",
-    amber: "bg-amber-500",
-    red: "bg-red-600",
-    green: "bg-emerald-500",
+    teal: "bg-[var(--accent)]",
+    amber: "bg-[var(--warning)]",
+    red: "bg-[var(--critical)]",
+    green: "bg-[var(--success)]",
     slate: "bg-slate-400"
   }[tone];
 

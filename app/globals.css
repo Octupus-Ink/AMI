@@ -2,15 +2,43 @@
 
 :root {
   color-scheme: light;
+
+  /* AMI semantic design tokens */
+  --surface: #ffffff;
+  --surface-muted: #f8f9fb;
+  --surface-raised: #ffffff;
+
+  --border: #e4e7ec;
+  --border-subtle: #f0f2f5;
+
+  --text: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+
+  --accent: #0d9488;
+  --accent-light: #f0fdfa;
+  --accent-hover: #0f766e;
+
+  --warning: #f59e0b;
+  --warning-light: #fffbeb;
+
+  --critical: #dc2626;
+  --critical-light: #fef2f2;
+
+  --success: #16a34a;
+  --success-light: #f0fdf4;
+
+  --info: #2563eb;
+  --info-light: #eff6ff;
+
+  /* Existing legacy tokens */
   --background: #f6f8fb;
   --foreground: #172033;
   --muted: #667085;
   --panel: #ffffff;
   --panel-soft: #f8fafc;
   --line: #d9e1ec;
-  --accent: #0f8ea3;
   --accent-strong: #0b6475;
-  --warning: #b76b09;
   --danger: #b42318;
 }
 
