@@ -68,6 +68,44 @@ Each raw source response is classified as `success`, `partial`, `empty`, or `fai
 
 AIMLAPI is used only for compact JSON analysis. Specialist agents run deterministic local analysis first; AMI Orchestrator calls AIMLAPI when configured for synthesis and final verdict. If AIMLAPI is disabled, missing, or returns invalid JSON, AMI falls back to deterministic synthesis and still returns a usable final report.
 
+### AI/ML API Integration (Orchestrator Context)
+
+The orchestrator’s AI/ML step must treat this README as the *operating model* for how to reason and how to format output for AMI.
+
+**Decision-first + evidence-first**
+- Produce a *business synthesis* (what decision/action to take next) based on the provided structured findings, metrics, and evidence snippets.
+- Do not invent evidence. If information is missing or confidence is low, reflect that as gaps, weak signals, or confidence/risk degradation.
+- Favor evidence traceability: decisions must be grounded in the compact evidence snippets and agent findings included in the input payload.
+
+**JSON-only + schema-compatible output**
+- Output must be strict JSON (no markdown, no commentary).
+- The orchestrator is expected to return a structured object compatible with the coordinator synthesis shape, including:
+  - `agentType` (should be `"orchestrator"`)
+  - `status` (e.g. `"completed"` or `"fallback"` depending on the orchestration mode)
+  - `summary` (one concise business synthesis)
+  - `agreements` (array of agreement items)
+  - `conflicts` (array of conflict items)
+  - `confidenceGaps` (array of missing/uncertain areas)
+  - `riskBlockers` (array of explicit risk blockers)
+  - `decisionFactors` (array of decision factors derived from metrics/signals)
+  - `strongestSignals` (array of strongest signals)
+  - `weakestSignals` (array of weakest signals)
+  - `confidence` (number)
+  - `riskLevel` (e.g. `"medium"` / `"high"`)
+
+**Risk-aware synthesis**
+- If any specialist findings indicate high/critical risk, the synthesis must surface it via `riskBlockers` and/or downgrade confidence.
+- If an agent is optional or skipped, do not treat it as a strong validation; reflect it as a confidence gap when relevant.
+
+**Fallback behavior**
+- If the response cannot be parsed into the expected JSON shape, AMI must switch to deterministic fallback synthesis and still produce a usable final report.
+
+**Constraints**
+- No external tool execution.
+- No raw HTML/full scraped pages.
+- No secrets or credentials in any output.
+
+
 ## Tech Stack Detected From Repo
 
 - Next.js App Router

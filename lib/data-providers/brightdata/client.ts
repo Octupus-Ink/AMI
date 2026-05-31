@@ -854,6 +854,62 @@ function fallbackResult(
   };
 }
 
+export type EbaySellerScrapeResult = {
+  status: "success" | "partial" | "empty" | "failed" | "not_configured";
+  products: NormalizedProduct[];
+  evidenceRefs: EvidenceRef[];
+  recordCount: number;
+  normalizedSellerCount: number;
+  snapshotId?: string;
+  datasetName: string;
+  safeError?: string;
+};
+
+// Controlled, single-call eBay marketplace seller collection for the supplier/
+// seller validation flow. Runs ONLY the structured eBay scraper (one query, no
+// Web Unlocker, no demo fallback), so a failure is reported as failed/empty rather
+// than silently substituting non-seller data. The caller owns the
+// AMI_ENABLE_LIVE_MARKETPLACE_SELLER_DATA flag + live-mode + demo-mode gating.
+export async function collectEbaySellerScrape(
+  context: MarketContextPayload,
+  diagnostics: BrightDataDiagnostics = {}
+): Promise<EbaySellerScrapeResult> {
+  const config = getBrightDataConfig();
+  const collectedAt = new Date().toISOString();
+  const env = validateBrightDataEnv(config);
+  const ebayContext: MarketContextPayload = { ...context, targetMarketplace: "eBay" };
+
+  if (!config.useLiveWeb || !env.configured || !config.ebayDatasetId || !config.webScraperEndpoint) {
+    return {
+      status: "not_configured",
+      products: [],
+      evidenceRefs: [],
+      recordCount: 0,
+      normalizedSellerCount: 0,
+      datasetName: "ebay_keyword"
+    };
+  }
+
+  // One structured eBay keyword query, capped at config.maxResults.
+  const result = await attemptStructuredScraper(ebayContext, config, collectedAt, diagnostics);
+  const products = (result.products ?? []).slice(0, config.maxResults);
+  const evidenceRefs = (result.evidenceRefs ?? []).slice(0, config.maxResults * 3);
+  const normalizedSellerCount = products.reduce((sum, product) => sum + (product.marketplaceSellers?.length ?? 0), 0);
+  const attemptStatus = result.attempt.status;
+  const status: EbaySellerScrapeResult["status"] = attemptStatus === "skipped" ? "not_configured" : attemptStatus;
+
+  return {
+    status,
+    products,
+    evidenceRefs,
+    recordCount: result.attempt.recordCount ?? products.length,
+    normalizedSellerCount,
+    ...(result.attempt.snapshotId ? { snapshotId: result.attempt.snapshotId } : {}),
+    datasetName: "ebay_keyword",
+    ...(result.attempt.safeError ? { safeError: result.attempt.safeError } : {})
+  };
+}
+
 export async function collectBrightDataEvidence(
   context: MarketContextPayload,
   overrideConfig?: Partial<BrightDataConfig>,

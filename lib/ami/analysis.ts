@@ -13,6 +13,7 @@ import type {
   EvidencePackage,
   EvidenceTraceMetadata,
   MarketContextPayload,
+  MarketplaceSeller,
   NormalizedProduct,
   NormalizedSourceMode,
   RawSourceSnapshotRecord,
@@ -43,7 +44,7 @@ import {
 } from "@/lib/analysis/source-trace";
 import { writeRunArtifacts } from "@/lib/analysis/run-artifacts";
 import { deriveSupplierSourceState, supplierMissingSignals, supplierSourceReason } from "@/lib/analysis/supplier-source-state";
-import { collectBrightDataEvidence } from "@/lib/data-providers/brightdata/client";
+import { collectBrightDataEvidence, collectEbaySellerScrape } from "@/lib/data-providers/brightdata/client";
 import type { BrightDataCollectionResult } from "@/lib/data-providers/brightdata/types";
 import { buildAgentStatus, buildGoalWorkflow, buildPendingAgentStatus, goalIntentFor, runAmiAgents, shouldRunSupplier } from "@/lib/agents/orchestrator";
 import type { AgentContext } from "@/lib/agents/types";
@@ -788,23 +789,40 @@ function fallbackVerdict(analysisRunId: string, context: MarketContextPayload, p
   };
 }
 
-// Supplier-native datasets the pipeline knows how to plan, mapped to the env var
-// that holds each dataset id. `planned` reflects which are configured in this
-// environment. Reading env presence is dry/local-safe — it triggers no collection.
-const SUPPLIER_NATIVE_DATASET_ENV: ReadonlyArray<{ key: string; envs: string[] }> = [
-  { key: "alibaba", envs: ["BRIGHT_DATA_ALIBABA_PRODUCTS_DATASET_ID"] },
-  { key: "aliexpress", envs: ["BRIGHT_DATA_ALIEXPRESS_PRODUCTS_DATASET_ID"] },
-  // eBay accepts the current name plus the legacy alias (see brightdata/client.ts).
-  { key: "ebay", envs: ["BRIGHT_DATA_EBAY_KEYWORD_DATASET_ID", "BRIGHT_DATA_EBAY_DATASET_ID"] }
-];
+// Real Bright Data marketplace seller sources planned for Supplier Comparison
+// (Amazon + eBay; NOT Alibaba/AliExpress).
+const SUPPLIER_MARKETPLACE_SELLER_SOURCES = ["amazon_seller_data", "ebay_marketplace_seller_data"] as const;
 
-function plannedSupplierNativeSources(): string[] {
-  return SUPPLIER_NATIVE_DATASET_ENV
-    .filter(({ envs }) => envs.some((env) => Boolean(process.env[env]?.trim())))
-    .map(({ key }) => key);
+// Live marketplace seller collection (the extra eBay call) is OFF by default and
+// only runs for real live runs — never demo. Set AMI_ENABLE_LIVE_MARKETPLACE_SELLER_DATA=true.
+function liveMarketplaceSellerDataEnabled(sourceMode: NormalizedSourceMode): boolean {
+  return process.env.AMI_ENABLE_LIVE_MARKETPLACE_SELLER_DATA === "true" && sourceMode === "live";
 }
 
-function buildSupplierOptions(context: MarketContextPayload, products: NormalizedProduct[]): SupplierOption[] {
+function marketplaceSellerSnapshot(
+  runId: string,
+  source: string,
+  status: RawSourceStatus,
+  recordCount: number,
+  details: { datasetName?: string; snapshotId?: string; safeError?: string } = {}
+): RawSourceSnapshotRecord {
+  return {
+    rawSourceSnapshotId: `${runId}:${source}:${status}`,
+    analysisRunId: runId,
+    source,
+    status,
+    errorCode:
+      status === "failed" ? "scraper_failed" : status === "empty" ? "empty_result" : status === "partial" ? "missing_fields" : null,
+    errorMessage: details.safeError ?? null,
+    // Report dataset NAME, not the (sensitive) dataset id.
+    input: { marketplace: source.startsWith("ebay") ? "ebay" : "amazon", operation: source, dataset: details.datasetName },
+    recordCount,
+    receivedAt: new Date().toISOString(),
+    ...(details.snapshotId ? { rawPayloadRef: `brightdata:snapshot:${details.snapshotId}` } : {})
+  };
+}
+
+export function buildSupplierOptions(context: MarketContextPayload, products: NormalizedProduct[]): SupplierOption[] {
   const seen = new Set<string>();
 
   const hasNonBlank = (value: unknown): boolean => typeof value === "string" && value.trim().length > 0;
@@ -864,16 +882,71 @@ function buildSupplierOptions(context: MarketContextPayload, products: Normalize
     return product.source;
   };
 
-  return products
-    .filter((product) => {
-      // A) Supplier identity/source signal exists
-      if (!hasSupplierIdentity(product)) return false;
+  // Real Bright Data marketplace seller (Amazon/eBay) → SupplierOption. Listing
+  // data only: estimatedUnitCost stays null, supplierCostValidated stays false,
+  // and the marketplace offer price is surfaced separately (never as supplier cost).
+  const buildMarketplaceSellerOption = (product: NormalizedProduct, seller: MarketplaceSeller): SupplierOption => {
+    const ratingNum =
+      seller.rating !== null && seller.rating !== undefined && Number.isFinite(seller.rating) ? Number(seller.rating) : Number.NaN;
+    const hasRating = Number.isFinite(ratingNum);
+    const hasDelivery = hasNonBlank(seller.deliveryRaw);
+    const hasAvailability = hasNonBlank(seller.availability);
+    const supplierUrl = seller.sellerUrl ?? product.supplierUrl;
 
-      // B) At least one real supplier evidence signal exists (partial evidence allowed)
-      if (!hasRealSupplierEvidence(product)) return false;
+    return {
+      supplierName: seller.sellerName,
+      source: seller.source,
+      ...(product.externalId ? { externalId: product.externalId } : {}),
+      evidenceRefIds: product.evidenceRefs,
+      ...(product.sourceUrl ? { sourceUrl: product.sourceUrl } : {}),
+      ...(product.productUrl ? { productUrl: product.productUrl } : {}),
+      ...(supplierUrl ? { supplierUrl } : {}),
+      ...(product.rawSourceSnapshotId ? { rawSourceSnapshotId: product.rawSourceSnapshotId } : {}),
+      lastSeenAt: product.lastSeenAt ?? product.lastUpdated,
+      estimatedUnitCost: null,
+      estimatedDeliveryTime: hasDelivery ? (seller.deliveryRaw as string) : "Unknown delivery time (not provided)",
+      availability: hasAvailability ? (seller.availability as string) : "Unknown availability (not provided)",
+      ratingQualityProxy: hasRating ? `${ratingNum.toFixed(1)} / 5 seller rating` : "Unknown rating (not provided)",
+      matchConfidence: confidenceLevel(product.matchConfidence ?? 0.6),
+      risk: riskForLegacy((product.riskScore ?? 55) >= 75 ? "high" : (product.riskScore ?? 55) >= 45 ? "medium" : "low"),
+      // Real Bright Data marketplace seller data — not a "fallback", but cost is
+      // not validated, so margin/ROI stay gated.
+      isFallback: false,
+      isBrightDataSource: true,
+      marketplaceOfferPrice: seller.marketplaceOfferPrice ?? null,
+      ...(seller.marketplaceOfferCurrency ? { marketplaceOfferCurrency: seller.marketplaceOfferCurrency } : {}),
+      ...(hasDelivery ? { deliveryRaw: seller.deliveryRaw as string } : {}),
+      rating: hasRating ? ratingNum : null,
+      supplierCostValidated: false
+    };
+  };
 
-      return true;
-    })
+  const dedupeKey = (supplier: SupplierOption) =>
+    [
+      supplier.source,
+      supplier.externalId,
+      supplier.evidenceRefIds.join("|"),
+      supplier.rawSourceSnapshotId,
+      supplier.supplierUrl,
+      supplier.productUrl,
+      supplier.sourceUrl,
+      supplier.supplierName,
+      supplier.marketplaceOfferPrice,
+      supplier.estimatedUnitCost
+    ]
+      .filter((value) => value !== undefined && value !== null && value !== "")
+      .join("::");
+
+  // 1) Real Bright Data marketplace seller options (Amazon/eBay).
+  const marketplaceSellerOptions: SupplierOption[] = products.flatMap((product) =>
+    (product.marketplaceSellers ?? []).map((seller) => buildMarketplaceSellerOption(product, seller))
+  );
+
+  // 2) Supplier-native options (alibaba/aliexpress/etc.) for products that did NOT
+  //    yield Bright Data marketplace sellers. Identity/evidence gating unchanged.
+  const nativeOptions: SupplierOption[] = products
+    .filter((product) => !(product.marketplaceSellers && product.marketplaceSellers.length))
+    .filter((product) => hasSupplierIdentity(product) && hasRealSupplierEvidence(product))
     .map((product, index) => {
       const isFallback = !isPrimarySupplierSource(product) || isFallbackSupplierSource(product);
 
@@ -904,31 +977,22 @@ function buildSupplierOptions(context: MarketContextPayload, products: Normalize
         ratingQualityProxy: hasRating ? `${rating.toFixed(1)} / 5 rating proxy` : "Unknown rating (not provided)",
         matchConfidence: confidenceLevel(product.matchConfidence ?? 0.6),
         risk: riskForLegacy((product.riskScore ?? 50) >= 75 ? "high" : (product.riskScore ?? 50) >= 45 ? "medium" : "low"),
-        isFallback
+        isFallback,
+        // True supplier cost only exists for a primary supplier source with a positive supplier price.
+        supplierCostValidated: isPrimarySupplierSource(product) && hasPositiveSupplierPrice(product)
       };
-    })
-    .filter((supplier) => {
-      const key = [
-        supplier.externalId,
-        supplier.evidenceRefIds.join("|"),
-        supplier.rawSourceSnapshotId,
-        supplier.supplierUrl,
-        supplier.productUrl,
-        supplier.sourceUrl,
-        supplier.supplierName,
-        supplier.estimatedUnitCost
-      ]
-        .filter(Boolean)
-        .join("::");
+    });
 
+  return [...marketplaceSellerOptions, ...nativeOptions]
+    .filter((supplier) => {
+      const key = dedupeKey(supplier);
       if (seen.has(key)) {
         return false;
       }
-
       seen.add(key);
       return true;
     })
-    .slice(0, 5);
+    .slice(0, 8);
 }
 
 function contributionFromOutput(output: AgentOutput, sourceMode: SourceMode): AssistantContribution {
@@ -1311,9 +1375,70 @@ export async function createAnalysisRunToMetrics(
     evidenceItems: collection.evidenceRefs.length
   });
 
+  // Real Bright Data marketplace seller collection. Amazon seller data comes from
+  // the primary Amazon Products records (no extra call). eBay seller data needs one
+  // controlled keyword query, gated by the flag + live mode (never demo). No fake
+  // data, no demo fallback, max 1 query per source.
+  const marketplaceSellerProducts: NormalizedProduct[] = [];
+  const marketplaceSellerSnapshots: RawSourceSnapshotRecord[] = [];
+
+  const amazonSellerCount = collection.products.reduce(
+    (sum, product) => sum + (product.marketplaceSellers ?? []).filter((seller) => seller.source === "amazon_seller_data").length,
+    0
+  );
+  if (amazonSellerCount > 0) {
+    marketplaceSellerSnapshots.push(
+      marketplaceSellerSnapshot(analysisRunId, "amazon_seller_data", "success", amazonSellerCount, { datasetName: "amazon_products" })
+    );
+    amiLog("BRIGHTDATA", "MARKETPLACE_SELLER_SOURCE", {
+      runId: analysisRunId,
+      source: "amazon_seller_data",
+      dataset: "amazon_products",
+      status: "success",
+      records: collection.products.length,
+      normalizedSellers: amazonSellerCount
+    });
+  }
+
+  const targetIsEbay = /ebay/i.test(context.targetMarketplace);
+  if (liveMarketplaceSellerDataEnabled(sourceMode) && !targetIsEbay) {
+    amiLog("BRIGHTDATA", "MARKETPLACE_SELLER_SOURCE_START", {
+      runId: analysisRunId,
+      source: "ebay_marketplace_seller_data",
+      dataset: "ebay_keyword",
+      keyword: context.productName
+    });
+    const ebay = await collectEbaySellerScrape(context, {
+      requestId,
+      analysisRunId,
+      briefingFingerprint: diagContext.briefingFingerprint
+    });
+    amiLog("BRIGHTDATA", "MARKETPLACE_SELLER_SOURCE", {
+      runId: analysisRunId,
+      source: "ebay_marketplace_seller_data",
+      dataset: ebay.datasetName,
+      status: ebay.status,
+      records: ebay.recordCount,
+      normalizedSellers: ebay.normalizedSellerCount,
+      snapshotId: ebay.snapshotId
+    });
+    if (ebay.products.length) {
+      marketplaceSellerProducts.push(...ebay.products);
+    }
+    if (ebay.status === "success" || ebay.status === "partial" || ebay.status === "empty" || ebay.status === "failed") {
+      marketplaceSellerSnapshots.push(
+        marketplaceSellerSnapshot(analysisRunId, "ebay_marketplace_seller_data", ebay.status, ebay.recordCount, {
+          datasetName: ebay.datasetName,
+          snapshotId: ebay.snapshotId,
+          safeError: ebay.safeError
+        })
+      );
+    }
+  }
+
   const metrics = extractPreliminaryMetrics(collection.products, collection.evidenceRefs.length);
   const initialStatus: AnalysisResult["status"] = collection.products.length ? "metrics_ready" : "failed";
-  const rawSourceSnapshots = buildRawSourceSnapshots(analysisRunId, collection);
+  const rawSourceSnapshots = [...buildRawSourceSnapshots(analysisRunId, collection), ...marketplaceSellerSnapshots];
   const rawSourceSummary = buildRawSourceSummary(rawSourceSnapshots);
   const dataQualitySummary = buildDataQualitySummary(collection, collection.products);
   const roleSourceStatus = rawStatusFromDataQuality(dataQualitySummary);
@@ -1403,9 +1528,18 @@ export async function createAnalysisRunToMetrics(
   // Authoritative supplier-native source state. Derived from the sources actually
   // attempted (rawSourceSummary / dataQualitySummary) + supplierOptions — never
   // from supplierOptions.length. No external calls; no supplier cost is invented.
-  const supplierOptions = buildSupplierOptions(context, collection.products);
-  const supplierSourcesPlanned = plannedSupplierNativeSources();
+  const supplierOptions = buildSupplierOptions(context, [...collection.products, ...marketplaceSellerProducts]);
+  const supplierSourcesPlanned = [...SUPPLIER_MARKETPLACE_SELLER_SOURCES];
   const supplierState = deriveSupplierSourceState({ supplierOptions, dataQualitySummary, rawSourceSummary });
+  // Attempted reflects only sources that actually produced seller candidates.
+  const supplierSourcesAttempted = Array.from(
+    new Set([
+      ...supplierState.attempted,
+      ...supplierOptions
+        .map((option) => option.source)
+        .filter((source) => source === "amazon_seller_data" || source === "ebay_marketplace_seller_data")
+    ])
+  );
   const supplierMissing = supplierMissingSignals({ supplierOptions });
   const supplierReason = supplierSourceReason(supplierState);
 
@@ -1466,7 +1600,7 @@ export async function createAnalysisRunToMetrics(
     supplierOptions,
     supplierSourceStatus: supplierState.status,
     supplierSourcesPlanned,
-    supplierSourcesAttempted: supplierState.attempted,
+    supplierSourcesAttempted,
     supplierMissingSignals: supplierMissing,
     supplierSourceReason: supplierReason,
     warnings,

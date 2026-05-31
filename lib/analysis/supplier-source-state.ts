@@ -70,13 +70,17 @@ export function deriveSupplierSourceState(analysis: SupplierSourceInput): Suppli
 
   let status: SupplierSourceStatus;
   if (optionCount > 0) {
-    // Supplier options survived. Only call it a success when at least one option
-    // carries a real supplier cost; otherwise the data is partial (identity/source
-    // evidence exists but cost/delivery/availability are still unknown).
-    const hasSupplierCost = options.some(
-      (option) => option.estimatedUnitCost !== null && option.estimatedUnitCost !== undefined
+    // "success" requires a VALIDATED supplier cost. If every option is real Bright
+    // Data marketplace seller data with no validated supplier cost, the coverage is
+    // "marketplace_seller_data_available". Anything in between is "partial".
+    const hasValidatedSupplierCost = options.some(
+      (option) =>
+        option.supplierCostValidated === true && option.estimatedUnitCost !== null && option.estimatedUnitCost !== undefined
     );
-    status = hasSupplierCost ? "success" : "partial";
+    const allMarketplaceSeller = options.every(
+      (option) => option.isBrightDataSource === true && option.supplierCostValidated !== true
+    );
+    status = hasValidatedSupplierCost ? "success" : allMarketplaceSeller ? "marketplace_seller_data_available" : "partial";
   } else if (failed.length > 0) {
     status = "failed";
   } else if (partial.length > 0) {
@@ -119,6 +123,8 @@ export function supplierMissingSignals(input: Pick<AnalysisResult, "supplierOpti
 /** Human-readable explanation for the supplier source status. */
 export function supplierSourceReason(state: SupplierSourceState): string {
   switch (state.status) {
+    case "marketplace_seller_data_available":
+      return "Marketplace seller data was collected via Bright Data. Supplier cost is not validated, so margin and ROI require supplier pricing confirmation.";
     case "success":
       return state.attempted.length
         ? `Supplier-native data collected from ${state.attempted.join(", ")}.`
@@ -143,5 +149,15 @@ export const SUPPLIER_SOURCE_EMPTY_COPY: Record<SupplierSourceStatus, string> = 
   empty: "Supplier-native source was checked, but no supplier matches were found for this analysis.",
   failed: "Supplier-native source could not be collected. Supplier comparison requires a successful supplier data run.",
   partial: "Supplier data is partial. Review supplier cost, delivery, and availability before acting.",
+  marketplace_seller_data_available:
+    "Marketplace seller data was collected via Bright Data. Supplier cost is not validated, so margin and ROI require supplier pricing confirmation.",
   success: "Supplier options connected to this analysis will appear here when available."
 };
+
+// Banner shown above Supplier Comparison when real Bright Data marketplace seller
+// (Amazon/eBay) data exists — never claims supplier cost is validated.
+export const SUPPLIER_MARKETPLACE_BANNER =
+  "Marketplace seller data was collected via Bright Data. Supplier cost is not validated, so margin and ROI require supplier pricing confirmation.";
+
+// Per-row note for real Bright Data marketplace seller rows.
+export const SUPPLIER_MARKETPLACE_ROW_NOTE = "Marketplace seller data collected via Bright Data. Supplier cost is not validated.";

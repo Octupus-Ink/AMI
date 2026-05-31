@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { MarketContextPayload, NormalizedProduct } from "@/lib/schemas/ami";
-import { NormalizedProductSchema } from "@/lib/schemas/ami";
+import type { MarketContextPayload, MarketplaceSeller, NormalizedProduct } from "@/lib/schemas/ami";
+import { MarketplaceSellerSchema, NormalizedProductSchema } from "@/lib/schemas/ami";
 import type { EvidenceRef } from "@/lib/schemas/agents";
 import { EvidenceRefSchema } from "@/lib/schemas/agents";
 import { sanitizeEvidenceSnippet, sanitizeEvidenceTitle, toHttpSourceUrl } from "@/lib/analysis/source-state";
@@ -408,6 +408,157 @@ function evidenceForProduct(
   });
 }
 
+// Detect whether a record is an Amazon or eBay marketplace listing, so we can
+// extract real marketplace SELLER data (not validated suppliers).
+function detectMarketplaceSellerKind(
+  record: Record<string, unknown>,
+  context: MarketContextPayload,
+  sourceUrl: string | undefined,
+  supplierUrl: string | null
+): "amazon" | "ebay" | null {
+  const text = [
+    context.targetMarketplace,
+    sourceUrl,
+    supplierUrl,
+    findString(record, ["seller_url", "sellerUrl", "store_url"]),
+    findString(record, ["source", "sourceName", "source_name", "marketplace", "platform"])
+  ]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .join(" ")
+    .toLowerCase();
+
+  if (/ebay/.test(text)) return "ebay";
+  if (/amazon/.test(text)) return "amazon";
+  return null;
+}
+
+function cleanDeliveryText(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    const first = value.find((item) => typeof item === "string" && item.trim());
+    return typeof first === "string" ? first.replace(/\s+/g, " ").trim().slice(0, 160) : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value.replace(/\s+/g, " ").trim().slice(0, 160);
+  }
+  return undefined;
+}
+
+function pushMarketplaceSeller(
+  sellers: MarketplaceSeller[],
+  seen: Set<string>,
+  source: string,
+  input: {
+    sellerName?: string;
+    sellerUrl?: string | null;
+    sellerId?: string;
+    price?: number;
+    currency?: string;
+    delivery?: string;
+    availability?: string;
+    rating?: number;
+  }
+) {
+  const name = input.sellerName?.trim();
+  if (!name || name.length < 2) {
+    return;
+  }
+
+  const key = name.toLowerCase();
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+
+  const url = toHttpSourceUrl(input.sellerUrl);
+  // Only accept a real 0–5 star rating; counts/percentages are not star ratings.
+  const rating =
+    typeof input.rating === "number" && Number.isFinite(input.rating) && input.rating >= 0 && input.rating <= 5
+      ? input.rating
+      : null;
+
+  sellers.push(
+    MarketplaceSellerSchema.parse({
+      sellerName: name,
+      ...(url ? { sellerUrl: url } : {}),
+      ...(input.sellerId ? { sellerId: input.sellerId } : {}),
+      source,
+      // marketplaceOfferPrice is the SELLER LISTING price — never supplier cost.
+      marketplaceOfferPrice: typeof input.price === "number" && Number.isFinite(input.price) ? input.price : null,
+      ...(input.currency ? { marketplaceOfferCurrency: input.currency } : {}),
+      ...(input.delivery ? { deliveryRaw: input.delivery } : {}),
+      ...(input.availability ? { availability: input.availability } : {}),
+      rating,
+      isBrightDataSource: true,
+      supplierCostValidated: false
+    })
+  );
+}
+
+// Extract real Bright Data marketplace seller data from a record.
+// Amazon: buybox/primary seller + other_sellers_prices[]. eBay: listing seller.
+// Returns [] for non-marketplace records, so no sellers are invented.
+function extractMarketplaceSellers(
+  record: Record<string, unknown>,
+  context: MarketContextPayload,
+  sourceUrl: string | undefined,
+  supplierUrl: string | null,
+  price: number | undefined
+): MarketplaceSeller[] {
+  const kind = detectMarketplaceSellerKind(record, context, sourceUrl, supplierUrl);
+  if (!kind) {
+    return [];
+  }
+
+  const sellers: MarketplaceSeller[] = [];
+  const seen = new Set<string>();
+  const currency = findString(record, ["currency"]) ?? context.currency;
+
+  if (kind === "amazon") {
+    const source = "amazon_seller_data";
+    pushMarketplaceSeller(sellers, seen, source, {
+      sellerName: findString(record, ["buybox_seller", "seller_name", "seller"]),
+      sellerUrl: findString(record, ["seller_url", "sellerUrl"]),
+      sellerId: findString(record, ["seller_id", "sellerId"]),
+      price,
+      currency,
+      delivery: cleanDeliveryText(record.delivery),
+      availability: findString(record, ["availability"]),
+      rating: findNumber(record, RATING_KEYS)
+    });
+
+    const others = record.other_sellers_prices;
+    if (Array.isArray(others)) {
+      for (const entry of others) {
+        const offer = asRecord(entry);
+        if (!offer) {
+          continue;
+        }
+        pushMarketplaceSeller(sellers, seen, source, {
+          sellerName: findString(offer, ["seller_name", "seller"]),
+          sellerUrl: findString(offer, ["seller_url", "sellerUrl"]),
+          price: findNumber(offer, ["price"]) ?? parseNumberFromText(offer.price),
+          currency: findString(offer, ["currency"]) ?? currency,
+          delivery: cleanDeliveryText(offer.delivery ?? offer.ships_from),
+          rating: findNumber(offer, ["seller_rating"])
+        });
+      }
+    }
+  } else {
+    const source = "ebay_marketplace_seller_data";
+    pushMarketplaceSeller(sellers, seen, source, {
+      sellerName: findString(record, ["seller_name", "store_name", "seller", "store"]),
+      sellerUrl: findString(record, ["seller_url", "store_url", "sellerUrl"]) ?? sourceUrl,
+      price: price ?? parseNumberFromText(record.price),
+      currency,
+      delivery: cleanDeliveryText(record.shipping ?? record.delivery ?? record.item_location),
+      availability: findString(record, ["availability", "condition"]),
+      rating: findNumber(record, RATING_KEYS) ?? findNumber(record, ["seller_rating"])
+    });
+  }
+
+  return sellers.slice(0, 6);
+}
+
 function normalizeRecord(
   record: Record<string, unknown>,
   evidenceRef: EvidenceRef,
@@ -447,6 +598,7 @@ function normalizeRecord(
   const { brand, brandConfidence } = resolveBrand(record, title);
   const categoryPath = resolveCategoryPath(record, context);
   const supplierName = findString(record, ["supplier", "seller", "merchant", "seller_name", "shop_name"]);
+  const marketplaceSellers = extractMarketplaceSellers(record, context, sourceUrl, supplierUrl ?? null, price);
   const missingFields = [
     price === undefined ? "price" : "",
     supplierUnitCost === undefined ? "supplierPrice" : "",
@@ -480,6 +632,7 @@ function normalizeRecord(
     imageUrl: findString(record, ["image_url", "image", "imageUrl", "thumbnail", "main_image"]),
     ...(supplierName ? { supplierName } : {}),
     ...(supplierUnitCost !== undefined ? { supplierPrice: supplierUnitCost } : {}),
+    ...(marketplaceSellers.length ? { marketplaceSellers } : {}),
     estimatedDeliveryTime: (Array.isArray(record.delivery) ? (record.delivery as string[]).join(" | ") : undefined) ?? findString(record, ["delivery", "deliveryEstimate", "shipping_time"]),
     deliveryCostNote: findString(record, ["shipping", "delivery_cost", "deliveryCostNote"]),
     matchConfidence: title.toLowerCase().includes(context.productName.toLowerCase().split(" ")[0]) ? 0.82 : 0.58,

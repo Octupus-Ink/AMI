@@ -16,6 +16,8 @@ import { Badge } from "@/components/ui/Badge";
 import { resolveSourceState, sanitizeEvidenceSnippet, toHttpSourceUrl } from "@/lib/analysis/source-state";
 import {
   deriveSupplierSourceState,
+  SUPPLIER_MARKETPLACE_BANNER,
+  SUPPLIER_MARKETPLACE_ROW_NOTE,
   SUPPLIER_SOURCE_EMPTY_COPY,
   type SupplierSourceStatus
 } from "@/lib/analysis/supplier-source-state";
@@ -1654,6 +1656,45 @@ function formatDeliveryBatch(delivery: string | undefined) {
   return delivery;
 }
 
+function isUnknownText(value: string | undefined | null) {
+  return !value || !value.trim() || /^unknown/i.test(value.trim());
+}
+
+function formatSupplierSourceLabel(source: string) {
+  if (source === "amazon_seller_data") return "Amazon seller data (Bright Data)";
+  if (source === "ebay_marketplace_seller_data") return "eBay marketplace seller data (Bright Data)";
+  return source;
+}
+
+// Marketplace seller LISTING price — never labelled or used as supplier cost.
+function formatMarketplaceOffer(supplier: SupplierOption) {
+  const price = supplier.marketplaceOfferPrice;
+  if (price === null || price === undefined || !Number.isFinite(price)) {
+    return "—";
+  }
+  return formatCurrency(price, supplier.marketplaceOfferCurrency ?? "USD");
+}
+
+function formatSupplierAvailability(value: string | undefined) {
+  return isUnknownText(value) ? "—" : (value as string);
+}
+
+function formatSupplierDeliveryCell(supplier: SupplierOption) {
+  const raw = supplier.deliveryRaw ?? supplier.estimatedDeliveryTime;
+  return isUnknownText(raw) ? "—" : formatDeliveryBatch(raw);
+}
+
+function formatSupplierRatingQuality(supplier: SupplierOption) {
+  if (supplier.rating !== null && supplier.rating !== undefined && Number.isFinite(supplier.rating)) {
+    return `${Number(supplier.rating).toFixed(1)} / 5`;
+  }
+  return isUnknownText(supplier.ratingQualityProxy) ? "—" : supplier.ratingQualityProxy;
+}
+
+function isBrightDataSellerRow(supplier: SupplierOption) {
+  return supplier.isBrightDataSource === true && supplier.supplierCostValidated !== true;
+}
+
 function formatMatchQualityLabel(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -1795,7 +1836,9 @@ function fallbackSupplierOptions(analysis: AnalysisResult): SupplierOption[] {
       ratingQualityProxy: "Unknown rating (not provided)",
       matchConfidence: evidence?.matchQuality ?? "medium",
       risk: "medium",
-      isFallback: true
+      isFallback: true,
+      // Placeholder signal, not a validated supplier cost.
+      supplierCostValidated: false
     }
   ];
 }
@@ -2480,6 +2523,11 @@ function ActiveTabContent({
               Supplier selected. Select product candidates manually to prepare Partner&apos;s Choice coverage.
             </p>
           )}
+          {suppliers.length > 0 && (supplierSourceStatus === "marketplace_seller_data_available" || suppliers.some(isBrightDataSellerRow)) && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {SUPPLIER_MARKETPLACE_BANNER}
+            </div>
+          )}
           {suppliers.length > 0 ? (
             <SupplierComparisonTable
               suppliers={suppliers}
@@ -3096,7 +3144,7 @@ function SupplierComparisonTable({
       <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
         <thead>
           <tr className="text-xs uppercase text-slate-500">
-            {["Supplier", "Source", "Catalog Matches", "Match", "Delivery batch", "Risk", "Action"].map((header) => (
+            {["Supplier / Seller", "Source", "Catalog Matches", "Marketplace Offer", "Delivery", "Availability", "Rating / Quality", "Match", "Risk", "Action"].map((header) => (
               <th key={header} className="border-b border-slate-200 px-3 py-2 font-semibold">
                 {header}
               </th>
@@ -3111,6 +3159,7 @@ function SupplierComparisonTable({
             const matchLabel = supplier.matchConfidence
               ? supplier.matchConfidence.charAt(0).toUpperCase() + supplier.matchConfidence.slice(1)
               : "—";
+            const brightDataRow = isBrightDataSellerRow(supplier);
 
             return (
               <tr key={supplierId}>
@@ -3123,15 +3172,21 @@ function SupplierComparisonTable({
                       aria-label={`Select ${supplier.supplierName}`}
                       className="mt-0.5 size-4 shrink-0 rounded border-slate-300 text-teal-600 focus:ring-teal-600"
                     />
-                    <span className="font-semibold text-slate-950">{supplier.supplierName}</span>
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-slate-950">{supplier.supplierName}</span>
+                      {brightDataRow && (
+                        <span className="mt-0.5 text-xs text-amber-700">{SUPPLIER_MARKETPLACE_ROW_NOTE}</span>
+                      )}
+                    </div>
                   </div>
                 </td>
-                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{supplier.source}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierSourceLabel(supplier.source)}</td>
                 <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{catalogDisplay}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatMarketplaceOffer(supplier)}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierDeliveryCell(supplier)}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierAvailability(supplier.availability)}</td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierRatingQuality(supplier)}</td>
                 <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{matchLabel}</td>
-                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
-                  {formatDeliveryBatch(supplier.estimatedDeliveryTime)}
-                </td>
                 <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{formatSupplierRisk(supplier.risk)}</td>
                 <td className="border-b border-slate-100 px-3 py-3">
                   <button

@@ -392,6 +392,25 @@ export const EvidencePackageSchema = z.object({
   assistantUsed: AssistantIdSchema
 });
 
+// Real Bright Data marketplace seller candidate (Amazon/eBay). This is genuine
+// scraped seller/source data — NOT fabricated and NOT a validated wholesale
+// supplier. marketplaceOfferPrice is the seller's listing price, never supplier
+// cost; supplierCostValidated is always false here.
+export const MarketplaceSellerSchema = z.object({
+  sellerName: z.string().min(1),
+  sellerUrl: z.string().url().optional(),
+  sellerId: z.string().optional(),
+  // "amazon_seller_data" | "ebay_marketplace_seller_data"
+  source: z.string().min(2),
+  marketplaceOfferPrice: z.number().nonnegative().nullable().default(null),
+  marketplaceOfferCurrency: z.string().optional(),
+  deliveryRaw: z.string().optional(),
+  availability: z.string().optional(),
+  rating: z.number().min(0).max(5).nullable().default(null),
+  isBrightDataSource: z.literal(true).default(true),
+  supplierCostValidated: z.literal(false).default(false)
+});
+
 export const SupplierOptionSchema = z.object({
   supplierName: z.string().min(2),
   source: z.string().min(2),
@@ -408,12 +427,28 @@ export const SupplierOptionSchema = z.object({
   ratingQualityProxy: z.string().min(2),
   matchConfidence: ConfidenceLevelSchema,
   risk: RiskLevelSchema,
-  isFallback: z.boolean().default(false)
+  isFallback: z.boolean().default(false),
+  // Real Bright Data marketplace seller fields (Amazon/eBay). marketplaceOfferPrice
+  // is a seller listing price, NOT supplier cost — estimatedUnitCost stays null and
+  // supplierCostValidated stays false unless a true supplier-cost field exists.
+  isBrightDataSource: z.boolean().optional(),
+  marketplaceOfferPrice: z.number().nonnegative().nullable().optional(),
+  marketplaceOfferCurrency: z.string().optional(),
+  deliveryRaw: z.string().optional(),
+  rating: z.number().min(0).max(5).nullable().optional(),
+  supplierCostValidated: z.boolean().default(false)
 });
 
 // Explicit supplier-native source status. Must be derived from the supplier
 // sources actually attempted, never inferred from `supplierOptions.length === 0`.
-export const SupplierSourceStatusSchema = z.enum(["not_attempted", "success", "partial", "empty", "failed"]);
+export const SupplierSourceStatusSchema = z.enum([
+  "not_attempted",
+  "success",
+  "partial",
+  "empty",
+  "failed",
+  "marketplace_seller_data_available"
+]);
 
 export const NormalizedProductSchema = z.object({
   source: z.string().min(1),
@@ -443,6 +478,9 @@ export const NormalizedProductSchema = z.object({
   imageUrl: z.string().url().optional(),
   supplierName: z.string().optional(),
   supplierPrice: z.number().nonnegative().optional(),
+  // Real Bright Data marketplace seller candidates extracted from Amazon/eBay
+  // records. Listing data only — never validated supplier cost.
+  marketplaceSellers: z.array(MarketplaceSellerSchema).optional(),
   estimatedDeliveryTime: z.string().optional(),
   deliveryCostNote: z.string().optional(),
   matchConfidence: z.number().min(0).max(1).optional(),
@@ -699,6 +737,7 @@ export type AssistantContribution = z.infer<typeof AssistantContributionSchema>;
 export type AssistantFinding = z.infer<typeof AssistantFindingSchema>;
 export type EvidencePackage = z.infer<typeof EvidencePackageSchema>;
 export type SupplierOption = z.infer<typeof SupplierOptionSchema>;
+export type MarketplaceSeller = z.infer<typeof MarketplaceSellerSchema>;
 export type SupplierSourceStatus = z.infer<typeof SupplierSourceStatusSchema>;
 export type NormalizedProduct = z.infer<typeof NormalizedProductSchema>;
 export type PreliminaryMetrics = z.infer<typeof PreliminaryMetricsSchema>;
